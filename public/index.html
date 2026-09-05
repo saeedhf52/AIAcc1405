@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl" class="h-full bg-slate-900 text-slate-100">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>دستیار هوشمند مالی و حسابداری شخصی</title>
+
+  <!-- Vazirmatn Font & Tailwind CSS -->
+  <link rel="preconnect" href="https://cdn.jsdelivr.net">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css">
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Vazirmatn', 'sans-serif'],
+          },
+          colors: {
+            brand: {
+              50: '#f0f9ff',
+              100: '#e0f2fe',
+              500: '#0ea5e9',
+              600: '#0284c7',
+              700: '#0369a1',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { font-family: 'Vazirmatn', sans-serif; }
+    .glass {
+      background: rgba(30, 41, 59, 0.7);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .scrollbar-thin::-webkit-scrollbar { width: 6px; height: 6px; }
+    .scrollbar-thin::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.6); }
+    .scrollbar-thin::-webkit-scrollbar-thumb { background: #334155; border-radius: 9999px; }
+  </style>
+</head>
+<body class="h-full bg-slate-950 text-slate-100 flex flex-col md:flex-row overflow-hidden">
+
+  <!-- Sidebar / Navigation -->
+  <aside class="w-full md:w-64 bg-slate-900 border-b md:border-b-0 md:border-l border-slate-800 flex flex-col justify-between shrink-0">
+    <div>
+      <!-- Logo Header -->
+      <div class="p-5 border-b border-slate-800 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center shadow-lg shadow-cyan-500/30">
+            <i data-lucide="bot" class="w-6 h-6 text-white"></i>
+          </div>
+          <div>
+            <h1 class="font-bold text-base text-slate-100">دستیار مالی هوشمند</h1>
+            <p class="text-xs text-slate-400">حسابداری شخصی AI</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Navigation Links -->
+      <nav class="p-3 space-y-1">
+        <button onclick="switchTab('dashboard')" id="nav-dashboard" class="nav-btn w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium text-sm transition text-cyan-400 bg-slate-800/80">
+          <i data-lucide="layout-dashboard" class="w-5 h-5"></i>
+          <span>داشبورد اصلی</span>
+        </button>
+        <button onclick="switchTab('transactions')" id="nav-transactions" class="nav-btn w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium text-sm transition text-slate-400 hover:text-slate-200 hover:bg-slate-800/50">
+          <i data-lucide="arrow-left-right" class="w-5 h-5"></i>
+          <span>دفتر ثبت تراکنش‌ها</span>
+        </button>
+        <button onclick="switchTab('receipts')" id="nav-receipts" class="nav-btn w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium text-sm transition text-slate-400 hover:text-slate-200 hover:bg-slate-800/50">
+          <i data-lucide="receipt" class="w-5 h-5"></i>
+          <span>رسیدهای واریزی</span>
+        </button>
+        <button onclick="switchTab('ledger')" id="nav-ledger" class="nav-btn w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium text-sm transition text-slate-400 hover:text-slate-200 hover:bg-slate-800/50">
+          <i data-lucide="users" class="w-5 h-5"></i>
+          <span>دفتر حساب اشخاص</span>
+        </button>
+        <button onclick="switchTab('ai-logs')" id="nav-ai-logs" class="nav-btn w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium text-sm transition text-slate-400 hover:text-slate-200 hover:bg-slate-800/50">
+          <i data-lucide="cpu" class="w-5 h-5"></i>
+          <span>تاریخچه هوش مصنوعی</span>
+        </button>
+      </nav>
+    </div>
+
+    <!-- Currency Toggle Footer -->
+    <div class="p-4 border-t border-slate-800 bg-slate-900/50">
+      <div class="flex items-center justify-between bg-slate-950 p-2 rounded-xl border border-slate-800">
+        <span class="text-xs text-slate-400 px-2">واحد پول:</span>
+        <button id="currency-toggle" onclick="toggleCurrency()" class="px-3 py-1 bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 rounded-lg text-xs font-bold transition">
+          ریال (IRR)
+        </button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main Content Area -->
+  <main class="flex-1 flex flex-col h-full overflow-hidden relative">
+
+    <!-- Top Header -->
+    <header class="h-16 border-b border-slate-800 px-6 flex items-center justify-between shrink-0 glass z-10">
+      <div class="flex items-center gap-3">
+        <h2 id="page-title" class="font-bold text-lg text-slate-100">نمای کلی داشبورد</h2>
+        <span class="px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1.5">
+          <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+          دیتابیس SQLite فعال
+        </span>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <button onclick="openNewTxModal()" class="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-600 hover:to-blue-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-cyan-500/20 transition">
+          <i data-lucide="plus" class="w-4 h-4"></i>
+          <span>ثبت تراکنش جدید</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Scrollable View Container -->
+    <div class="flex-1 overflow-y-auto p-6 scrollbar-thin space-y-6">
+
+      <!-- View 1: DASHBOARD -->
+      <section id="view-dashboard" class="space-y-6">
+        <!-- KPI Cards Grid -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+
+          <div class="p-5 rounded-2xl glass border border-slate-800 relative overflow-hidden group">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-medium text-slate-400">مجموع کل طلب‌ها</span>
+              <div class="w-9 h-9 rounded-xl bg-cyan-500/10 text-cyan-400 flex items-center justify-center">
+                <i data-lucide="trending-up" class="w-5 h-5"></i>
+              </div>
+            </div>
+            <div class="mt-3">
+              <span id="kpi-claim" class="text-2xl font-black tracking-tight text-cyan-400">0</span>
+              <span class="text-xs text-slate-500 mr-1 currency-unit">ریال</span>
+            </div>
+            <div class="mt-2 text-xs text-slate-400">مجموع بدهکاری طرفین حساب</div>
+          </div>
+
+          <div class="p-5 rounded-2xl glass border border-slate-800 relative overflow-hidden group">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-medium text-slate-400">مجموع پرداختی‌ها</span>
+              <div class="w-9 h-9 rounded-xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center">
+                <i data-lucide="check-circle-2" class="w-5 h-5"></i>
+              </div>
+            </div>
+            <div class="mt-3">
+              <span id="kpi-paid" class="text-2xl font-black tracking-tight text-emerald-400">0</span>
+              <span class="text-xs text-slate-500 mr-1 currency-unit">ریال</span>
+            </div>
+            <div class="mt-2 text-xs text-slate-400">مبالغ تسویه‌شده و دریافتی</div>
+          </div>
+
+          <div class="p-5 rounded-2xl glass border border-slate-800 relative overflow-hidden group">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-medium text-slate-400">مانده کل دفتر حساب</span>
+              <div class="w-9 h-9 rounded-xl bg-purple-500/10 text-purple-400 flex items-center justify-center">
+                <i data-lucide="wallet" class="w-5 h-5"></i>
+              </div>
+            </div>
+            <div class="mt-3">
+              <span id="kpi-balance" class="text-2xl font-black tracking-tight text-purple-400">0</span>
+              <span class="text-xs text-slate-500 mr-1 currency-unit">ریال</span>
+            </div>
+            <div class="mt-2 text-xs text-slate-400">خالص طلب باقی‌مانده</div>
+          </div>
+
+          <div class="p-5 rounded-2xl glass border border-slate-800 relative overflow-hidden group">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-medium text-slate-400">تعداد اسناد و رسیدها</span>
+              <div class="w-9 h-9 rounded-xl bg-amber-500/10 text-amber-400 flex items-center justify-center">
+                <i data-lucide="file-text" class="w-5 h-5"></i>
+              </div>
+            </div>
+            <div class="mt-3 flex items-baseline gap-2">
+              <span id="kpi-tx-count" class="text-2xl font-black tracking-tight text-amber-400">0</span>
+              <span class="text-xs text-slate-400">تراکنش</span>
+              <span class="text-slate-600">|</span>
+              <span id="kpi-receipt-count" class="text-lg font-bold text-slate-300">0</span>
+              <span class="text-xs text-slate-400">رسید</span>
+            </div>
+            <div class="mt-2 text-xs text-slate-400">اسناد ثبت‌شده در دیتابیس</div>
+          </div>
+
+        </div>
+
+        <!-- Charts & Top Debtors Section -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <!-- Main Chart -->
+          <div class="lg:col-span-2 p-5 rounded-2xl glass border border-slate-800 space-y-4">
+            <div class="flex items-center justify-between">
+              <h3 class="font-bold text-sm text-slate-200">مقایسه طلب، پرداخت و مانده حساب‌ها</h3>
+              <span class="text-xs text-slate-400">دفتر حساب کل</span>
+            </div>
+            <div class="h-64">
+              <canvas id="ledgerChart"></canvas>
+            </div>
+          </div>
+
+          <!-- Top Counterparties List -->
+          <div class="p-5 rounded-2xl glass border border-slate-800 space-y-4">
+            <h3 class="font-bold text-sm text-slate-200">بزرگترین بدهکاران (مانده طلب)</h3>
+            <div id="top-debtors-list" class="space-y-3">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+        </div>
+
+        <!-- Recent Transactions Table -->
+        <div class="p-5 rounded-2xl glass border border-slate-800 space-y-4">
+          <div class="flex items-center justify-between">
+            <h3 class="font-bold text-sm text-slate-200">آخرین تراکنش‌های ثبت‌شده</h3>
+            <button onclick="switchTab('transactions')" class="text-xs text-cyan-400 hover:underline">مشاهده همه تراکنش‌ها</button>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-right text-xs">
+              <thead class="text-slate-400 border-b border-slate-800 bg-slate-900/50">
+                <tr>
+                  <th class="p-3">تاریخ</th>
+                  <th class="p-3">نوع تراکنش</th>
+                  <th class="p-3">طرف حساب</th>
+                  <th class="p-3">مبلغ</th>
+                  <th class="p-3">شرح</th>
+                </tr>
+              </thead>
+              <tbody id="recent-tx-tbody" class="divide-y divide-slate-800/50">
+                <!-- Dynamically populated -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- View 2: TRANSACTIONS -->
+      <section id="view-transactions" class="space-y-6 hidden">
+        <div class="flex flex-col sm:flex-row gap-4 items-center justify-between">
+          <div class="flex items-center gap-3 w-full sm:w-auto">
+            <input type="text" id="tx-search" oninput="filterTransactions()" placeholder="جستجو در شرح، طرف حساب یا پیگیری..." class="bg-slate-900 border border-slate-800 rounded-xl px-4 py-2 text-xs w-full sm:w-72 focus:outline-none focus:border-cyan-500">
+            <select id="tx-type-filter" onchange="filterTransactions()" class="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-cyan-500">
+              <option value="">همه انواع</option>
+              <option value="ایجاد بدهی">ایجاد بدهی</option>
+              <option value="پرداخت">پرداخت</option>
+              <option value="ایجاد طلب">ایجاد طلب</option>
+              <option value="دریافت">دریافت</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="p-5 rounded-2xl glass border border-slate-800">
+          <div class="overflow-x-auto">
+            <table class="w-full text-right text-xs">
+              <thead class="text-slate-400 border-b border-slate-800 bg-slate-900/50">
+                <tr>
+                  <th class="p-3">شناسه</th>
+                  <th class="p-3">تاریخ</th>
+                  <th class="p-3">نوع تراکنش</th>
+                  <th class="p-3">طرف حساب</th>
+                  <th class="p-3">مبلغ</th>
+                  <th class="p-3">شرح</th>
+                  <th class="p-3">کد پیگیری</th>
+                  <th class="p-3 text-center">عملیات</th>
+                </tr>
+              </thead>
+              <tbody id="all-tx-tbody" class="divide-y divide-slate-800/50">
+                <!-- Dynamically populated -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- View 3: RECEIPTS -->
+      <section id="view-receipts" class="space-y-6 hidden">
+        <div class="p-5 rounded-2xl glass border border-slate-800">
+          <h3 class="font-bold text-sm text-slate-200 mb-4">رسیدهای بانکی و واریزی ثبت‌شده</h3>
+          <div class="overflow-x-auto">
+            <table class="w-full text-right text-xs">
+              <thead class="text-slate-400 border-b border-slate-800 bg-slate-900/50">
+                <tr>
+                  <th class="p-3">ردیف</th>
+                  <th class="p-3">تاریخ</th>
+                  <th class="p-3">طرف حساب</th>
+                  <th class="p-3">مبلغ</th>
+                  <th class="p-3">شماره حساب</th>
+                  <th class="p-3">منبع</th>
+                  <th class="p-3">سند/پیگیری</th>
+                  <th class="p-3">شرح</th>
+                </tr>
+              </thead>
+              <tbody id="all-receipts-tbody" class="divide-y divide-slate-800/50">
+                <!-- Dynamically populated -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- View 4: LEDGER -->
+      <section id="view-ledger" class="space-y-6 hidden">
+        <div class="p-5 rounded-2xl glass border border-slate-800">
+          <h3 class="font-bold text-sm text-slate-200 mb-4">وضعیت خلاصه حساب اشخاص (دفتر حساب)</h3>
+          <div class="overflow-x-auto">
+            <table class="w-full text-right text-xs">
+              <thead class="text-slate-400 border-b border-slate-800 bg-slate-900/50">
+                <tr>
+                  <th class="p-3">نام طرف حساب</th>
+                  <th class="p-3">کل طلب</th>
+                  <th class="p-3">پرداختی</th>
+                  <th class="p-3">مانده حساب</th>
+                  <th class="p-3">وضعیت</th>
+                </tr>
+              </thead>
+              <tbody id="all-ledger-tbody" class="divide-y divide-slate-800/50">
+                <!-- Dynamically populated -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- View 5: AI LOGS -->
+      <section id="view-ai-logs" class="space-y-6 hidden">
+        <div class="p-5 rounded-2xl glass border border-slate-800 space-y-4">
+          <h3 class="font-bold text-sm text-slate-200">تاریخچه لاگ‌های پردازش هوش مصنوعی (9router AI)</h3>
+          <div class="overflow-x-auto">
+            <table class="w-full text-right text-xs">
+              <thead class="text-slate-400 border-b border-slate-800 bg-slate-900/50">
+                <tr>
+                  <th class="p-3">زمان</th>
+                  <th class="p-3">نوع ورودی</th>
+                  <th class="p-3">Intent</th>
+                  <th class="p-3">وضعیت</th>
+                  <th class="p-3">زمان پردازش</th>
+                </tr>
+              </thead>
+              <tbody id="all-ai-logs-tbody" class="divide-y divide-slate-800/50">
+                <!-- Dynamically populated -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+    </div>
+
+    <!-- FLOATING SMART AI CHATBOX -->
+    <div id="ai-chatbox" class="fixed bottom-6 left-6 z-50 w-96 max-w-[calc(100vw-3rem)] rounded-2xl glass border border-cyan-500/30 shadow-2xl shadow-cyan-950/50 flex flex-col transition-all duration-300">
+      <!-- Chat Header -->
+      <div class="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/90 rounded-t-2xl">
+        <div class="flex items-center gap-2.5">
+          <div class="w-7 h-7 rounded-lg bg-cyan-500/20 text-cyan-400 flex items-center justify-center">
+            <i data-lucide="sparkles" class="w-4 h-4"></i>
+          </div>
+          <div>
+            <h4 class="font-bold text-xs text-slate-100">دستیار متنی و صوتی AI</h4>
+            <p class="text-[10px] text-slate-400">مدل claude-smart-ai-kb (9router)</p>
+          </div>
+        </div>
+        <button onclick="toggleChatMinimize()" class="text-slate-400 hover:text-slate-200">
+          <i data-lucide="chevron-down" id="chat-toggle-icon" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <!-- Chat Body / Messages -->
+      <div id="chat-messages" class="p-4 h-64 overflow-y-auto space-y-3 scrollbar-thin text-xs">
+        <div class="p-3 rounded-xl bg-cyan-500/10 text-cyan-200 border border-cyan-500/20">
+          👋 سلام! من دستیار هوشمند مالی شما هستم.<br>
+          می‌توانید پیام متنی بنویسید یا دکمه میکروفون را بزنید و درخواست خود را **صوتی** بگویید.<br>
+          مثال: <i>"۵۰۰ هزار تومان بابت ساخت به آقای صادقی پرداخت شد"</i>
+        </div>
+      </div>
+
+      <!-- Chat Input Controls -->
+      <div id="chat-input-container" class="p-3 border-t border-slate-800 bg-slate-900/90 rounded-b-2xl flex items-center gap-2">
+        <input type="text" id="ai-text-input" onkeydown="if(event.key==='Enter') sendTextMessage()" placeholder="درخواست خود را بنویسید..." class="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-cyan-500 text-slate-100">
+
+        <!-- Voice Record Button -->
+        <button id="mic-btn" onclick="toggleVoiceRecord()" class="w-9 h-9 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white flex items-center justify-center transition shrink-0">
+          <i data-lucide="mic" id="mic-icon" class="w-4 h-4"></i>
+        </button>
+
+        <button onclick="sendTextMessage()" class="w-9 h-9 rounded-xl bg-cyan-500 text-white hover:bg-cyan-600 flex items-center justify-center transition shrink-0">
+          <i data-lucide="send" class="w-4 h-4"></i>
+        </button>
+      </div>
+    </div>
+
+    <!-- NEW TRANSACTION MODAL -->
+    <div id="tx-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center hidden">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+          <h3 class="font-bold text-sm text-slate-100">ثبت تراکنش دستی جدید</h3>
+          <button onclick="closeNewTxModal()" class="text-slate-400 hover:text-slate-200">
+            <i data-lucide="x" class="w-5 h-5"></i>
+          </button>
+        </div>
+
+        <form id="new-tx-form" onsubmit="submitNewTx(event)" class="space-y-3 text-xs">
+          <div>
+            <label class="block text-slate-400 mb-1">تاریخ تراکنش (جلالی):</label>
+            <input type="text" id="modal-date" required placeholder="1405/05/17" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 focus:outline-none focus:border-cyan-500">
+          </div>
+          <div>
+            <label class="block text-slate-400 mb-1">نوع تراکنش:</label>
+            <select id="modal-type" required class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 focus:outline-none focus:border-cyan-500">
+              <option value="ایجاد بدهی">ایجاد بدهی</option>
+              <option value="پرداخت">پرداخت</option>
+              <option value="ایجاد طلب">ایجاد طلب</option>
+              <option value="دریافت">دریافت</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-slate-400 mb-1">نام طرف حساب:</label>
+            <input type="text" id="modal-party" required placeholder="نام شخص یا پیمانکار" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 focus:outline-none focus:border-cyan-500">
+          </div>
+          <div>
+            <label class="block text-slate-400 mb-1">مبلغ (ریال):</label>
+            <input type="number" id="modal-amount" required placeholder="مبلغ به ریال" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 focus:outline-none focus:border-cyan-500">
+          </div>
+          <div>
+            <label class="block text-slate-400 mb-1">شرح تراکنش:</label>
+            <input type="text" id="modal-desc" placeholder="توضیحات و بابت..." class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 focus:outline-none focus:border-cyan-500">
+          </div>
+          <div>
+            <label class="block text-slate-400 mb-1">شماره پیگیری / سند:</label>
+            <input type="text" id="modal-tracking" placeholder="اختیاری" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 focus:outline-none focus:border-cyan-500">
+          </div>
+
+          <div class="pt-3 flex gap-2">
+            <button type="submit" class="flex-1 py-2.5 bg-cyan-500 hover:bg-cyan-600 font-bold text-white rounded-xl transition">ثبت در دیتابیس</button>
+            <button type="button" onclick="closeNewTxModal()" class="px-4 py-2.5 bg-slate-800 text-slate-300 rounded-xl">انصراف</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+  </main>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>

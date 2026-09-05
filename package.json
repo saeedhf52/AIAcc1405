@@ -1,0 +1,30 @@
+{
+  "name": "smart-financial-assistant",
+  "version": "1.0.0",
+  "description": "دستیار هوشمند مالی و حسابداری شخصی با دیتابیس محلی SQLite، هوش مصنوعی صوتی/متنی و داشبورد فارسی",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "seed": "node server/services/excelImporter.js"
+  },
+  "keywords": [
+    "finance",
+    "ai",
+    "accounting",
+    "persian",
+    "sqlite",
+    "jalali"
+  ],
+  "author": "Saeed",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.7.9",
+    "better-sqlite3": "^11.8.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "jalaali-js": "^1.2.7",
+    "multer": "^1.4.5-lts.1",
+    "xlsx": "^0.18.5"
+  }
+}
