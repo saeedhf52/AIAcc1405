@@ -176,6 +176,27 @@ function initDatabase() {
     );
   `);
 
+  // مایگریشن خودکار افزودن ستون‌های مورد نیاز به دیتابیس‌های موجود
+  try {
+    const receiptCols = db.prepare("PRAGMA table_info(receipts)").all().map(c => c.name);
+    if (!receiptCols.includes('reconciliation_status')) {
+      db.exec("ALTER TABLE receipts ADD COLUMN reconciliation_status TEXT CHECK(reconciliation_status IN ('unreconciled', 'matched', 'partially')) DEFAULT 'unreconciled'");
+      db.exec("UPDATE receipts SET reconciliation_status = 'unreconciled' WHERE reconciliation_status IS NULL");
+    }
+
+    const txCols = db.prepare("PRAGMA table_info(transactions)").all().map(c => c.name);
+    if (!txCols.includes('reconciliation_status')) {
+      db.exec("ALTER TABLE transactions ADD COLUMN reconciliation_status TEXT CHECK(reconciliation_status IN ('unreconciled', 'matched', 'partially')) DEFAULT 'unreconciled'");
+      db.exec("UPDATE transactions SET reconciliation_status = 'unreconciled' WHERE reconciliation_status IS NULL");
+    }
+
+    if (!txCols.includes('dedup_hash')) {
+      db.exec("ALTER TABLE transactions ADD COLUMN dedup_hash TEXT");
+    }
+  } catch (err) {
+    console.error('[Database Migration Error]:', err.message);
+  }
+
   // ثبت حساب‌های پایه دوبل
   const accountCount = db.prepare('SELECT COUNT(*) as count FROM accounts').get().count;
   if (accountCount === 0) {

@@ -227,6 +227,7 @@ async function executeAIIntent(data, inputType = 'text') {
   if (data.intent === 'RECEIPT') {
     const receipts = Array.isArray(data.receipts) ? data.receipts : [data.receipts];
     let addedCount = 0;
+    let duplicateCount = 0;
 
     const insertParty = db.prepare('INSERT OR IGNORE INTO parties (name) VALUES (?)');
     const getPartyId = db.prepare('SELECT id FROM parties WHERE name = ?');
@@ -251,7 +252,11 @@ async function executeAIIntent(data, inputType = 'text') {
         if (pObj) partyId = pObj.id;
       }
 
-      const dedupHash = docNum ? docNum : `${dateStr}_${amount}_${partyName}`;
+      // تولید کلید یکتای قوی برای عدم ثبت تکراری:
+      // اگر شماره سند معتبر باشد (بزرگتر از ۳ کاراکتر و نان‌عمومی)، از آن استفاده می‌شود؛ در غیر اینصورت از ترکیب تاریخ+مبلغ+طرف‌حساب
+      const isSpecificDoc = docNum && docNum.length > 3 && !['چک', 'فیش', 'پایا', 'ساتنا', 'حواله', 'کارت'].includes(docNum);
+      const dedupHash = isSpecificDoc ? `DOC_${docNum}` : `REC_${dateStr}_${amount}_${partyName}`;
+
       const info = insertReceipt.run(
         dateStr,
         normalizeNumbers(rec.description || ''),
@@ -267,6 +272,8 @@ async function executeAIIntent(data, inputType = 'text') {
       if (info.changes > 0) {
         addedCount++;
         if (partyName) recalculateLedgerForParty(partyName);
+      } else {
+        duplicateCount++;
       }
     }
 
@@ -275,14 +282,14 @@ async function executeAIIntent(data, inputType = 'text') {
         success: true,
         intent: 'RECEIPT',
         addedCount,
-        message: `✅ عملیات موفق! **${addedCount}** رسید جدید واریزی ثبت شد.`
+        message: `✅ عملیات موفق! **${addedCount}** رسید جدید واریزی ثبت شد.` + (duplicateCount > 0 ? `\n⚠️ **${duplicateCount}** رسید به دلیل تکراری بودن نادیده گرفته شد.` : '')
       };
     } else {
       return {
         success: true,
         intent: 'RECEIPT',
         addedCount: 0,
-        message: '⚠️ رسید جدیدی ثبت نشد (احتمالاً تکراری بود یا مبالغ نامعتبر بودند).'
+        message: '⚠️ این رسید قبلاً در سیستم ثبت شده است و از ثبت تکراری آن جلوگیری شد.'
       };
     }
   }
@@ -299,10 +306,31 @@ function commitTransactionData(date, type, partyName, amount, description, track
   const partyObj = db.prepare('SELECT id FROM parties WHERE name = ?').get(partyName);
   const partyId = partyObj ? partyObj.id : null;
 
+  const normTracking = normalizeNumbers(trackingCode || '');
+  const isSpecificTracking = normTracking && normTracking.length > 3 && !['چک', 'فیش', 'پایا', 'ساتنا', 'حواله', 'کارت'].includes(normTracking);
+  const dedupHash = isSpecificTracking ? `DOC_${normTracking}` : `TX_${date}_${type}_${amount}_${partyName}`;
+
+  // بررسی تکراری بودن تراکنش
+  const existingTx = db.prepare(`
+    SELECT id FROM transactions
+    WHERE dedup_hash = ?
+       OR (date = ? AND type = ? AND amount = ? AND party_name = ?)
+  `).get(dedupHash, date, type, amount, partyName);
+
+  if (existingTx) {
+    return {
+      success: true,
+      intent: 'TRANSACTION',
+      duplicate: true,
+      transactionId: existingTx.id,
+      message: `⚠️ **هشدار ثبت تکراری:**\nتراکنش با این مشخصات (تاریخ: ${date}، شخص: **${partyName}**، مبلغ: **${Number(amount).toLocaleString('fa-IR')} ریال**) قبلاً در دیتابیس ثبت شده است و از ایجاد مجدد آن جلوگیری شد.`
+    };
+  }
+
   const res = db.prepare(`
-    INSERT INTO transactions (date, type, party_id, party_name, amount, description, tracking_code)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(date, type, partyId, partyName, amount, description || '', normalizeNumbers(trackingCode || ''));
+    INSERT INTO transactions (date, type, party_id, party_name, amount, description, tracking_code, dedup_hash)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(date, type, partyId, partyName, amount, description || '', normTracking, dedupHash);
 
   const txId = res.lastInsertRowid;
 
