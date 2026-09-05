@@ -4,7 +4,6 @@ const fs = require('fs');
 
 const dbPath = process.env.DATABASE_PATH || path.join(__dirname, '../../data/accounting.db');
 
-// مطمئن شدن از وجود پوشه data
 const dataDir = path.dirname(dbPath);
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
@@ -12,7 +11,6 @@ if (!fs.existsSync(dataDir)) {
 
 const db = new Database(dbPath);
 
-// فعال کردن کلیدهای خارجی و کارایی بالا
 db.pragma('foreign_keys = ON');
 db.pragma('journal_mode = WAL');
 
@@ -47,6 +45,7 @@ function initDatabase() {
       category_id INTEGER,
       description TEXT,
       tracking_code TEXT,
+      reconciliation_status TEXT CHECK(reconciliation_status IN ('unreconciled', 'matched', 'partially')) DEFAULT 'unreconciled',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(party_id) REFERENCES parties(id) ON DELETE SET NULL,
       FOREIGN KEY(category_id) REFERENCES categories(id) ON DELETE SET NULL
@@ -65,6 +64,7 @@ function initDatabase() {
       source TEXT,
       document_number TEXT,
       dedup_hash TEXT UNIQUE,
+      reconciliation_status TEXT CHECK(reconciliation_status IN ('unreconciled', 'matched', 'partially')) DEFAULT 'unreconciled',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(party_id) REFERENCES parties(id) ON DELETE SET NULL
     );
@@ -102,21 +102,93 @@ function initDatabase() {
       execution_time_ms INTEGER,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+
+    -- ==========================================
+    -- سیستم جدید حسابداری دوبل (Double-Entry Accounting)
+    -- ==========================================
+
+    -- 8. جدول کدینگ حساب‌ها (Chart of Accounts)
+    CREATE TABLE IF NOT EXISTS accounts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      code TEXT UNIQUE NOT NULL,
+      title TEXT NOT NULL,
+      type TEXT CHECK(type IN ('asset', 'liability', 'equity', 'revenue', 'expense')) NOT NULL,
+      parent_id INTEGER,
+      FOREIGN KEY(parent_id) REFERENCES accounts(id) ON DELETE CASCADE
+    );
+
+    -- 9. جدول اسناد حسابداری / دفتر روزنامه (Journal Vouchers)
+    CREATE TABLE IF NOT EXISTS journal_vouchers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      voucher_number INTEGER UNIQUE NOT NULL,
+      date TEXT NOT NULL,
+      description TEXT NOT NULL,
+      source_type TEXT CHECK(source_type IN ('TRANSACTION', 'RECEIPT', 'MANUAL')) DEFAULT 'MANUAL',
+      source_id INTEGER,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- 10. جدول آرتیکل‌های سند بدهکار/بستانکار (Journal Entries)
+    CREATE TABLE IF NOT EXISTS journal_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      voucher_id INTEGER NOT NULL,
+      account_id INTEGER NOT NULL,
+      party_id INTEGER,
+      debit INTEGER DEFAULT 0,
+      credit INTEGER DEFAULT 0,
+      description TEXT,
+      FOREIGN KEY(voucher_id) REFERENCES journal_vouchers(id) ON DELETE CASCADE,
+      FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE RESTRICT,
+      FOREIGN KEY(party_id) REFERENCES parties(id) ON DELETE SET NULL
+    );
+
+    -- ==========================================
+    -- سیستم تایید هوشمند اشخاص (Party Pending Confirmations)
+    -- ==========================================
+
+    -- 11. جدول تاییدهای معلق هوش مصنوعی
+    CREATE TABLE IF NOT EXISTS pending_confirmations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      input_type TEXT NOT NULL,
+      suggested_party_name TEXT NOT NULL,
+      candidate_party_id INTEGER,
+      candidate_party_name TEXT,
+      similarity_score REAL,
+      intent_data TEXT NOT NULL,
+      status TEXT CHECK(status IN ('pending', 'confirmed_existing', 'created_new', 'rejected')) DEFAULT 'pending',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- ==========================================
+    -- سیستم مغایرت‌یابی و اقلام باز (Reconciliations)
+    -- ==========================================
+
+    -- 12. جدول پیوند مغایرت‌یابی و مطابقت رسید با تراکنش
+    CREATE TABLE IF NOT EXISTS reconciliations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      receipt_id INTEGER NOT NULL,
+      transaction_id INTEGER NOT NULL,
+      matched_amount INTEGER NOT NULL,
+      match_type TEXT CHECK(match_type IN ('auto_doc', 'auto_amount', 'manual')) DEFAULT 'manual',
+      reconciled_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(receipt_id) REFERENCES receipts(id) ON DELETE CASCADE,
+      FOREIGN KEY(transaction_id) REFERENCES transactions(id) ON DELETE CASCADE
+    );
   `);
 
-  // ثبت چند دسته‌بندی پیش‌فرض در صورت خالی بودن
-  const catCount = db.prepare('SELECT COUNT(*) as count FROM categories').get().count;
-  if (catCount === 0) {
-    const insertCat = db.prepare('INSERT INTO categories (name, type, icon, color) VALUES (?, ?, ?, ?)');
-    const defaultCats = [
-      ['ساخت و ساز', 'expense', 'building', '#EF4444'],
-      ['خرید زمین', 'expense', 'map-pin', '#F59E0B'],
-      ['حق الزحمه و دستمزد', 'expense', 'users', '#10B981'],
-      ['حمل و نقل و کرایه', 'expense', 'truck', '#6366F1'],
-      ['تاسیسات و ابزار', 'expense', 'wrench', '#8B5CF6'],
-      ['متفرقه', 'both', 'grid', '#6B7280']
+  // ثبت حساب‌های پایه دوبل
+  const accountCount = db.prepare('SELECT COUNT(*) as count FROM accounts').get().count;
+  if (accountCount === 0) {
+    const insertAcc = db.prepare('INSERT INTO accounts (code, title, type, parent_id) VALUES (?, ?, ?, ?)');
+    const defaultAccounts = [
+      ['101', 'موجودی نقد و بانک‌ها', 'asset', null],
+      ['102', 'حساب‌ها و اسناد دریافتنی (اشخاص)', 'asset', null],
+      ['201', 'حساب‌ها و اسناد پرداختنی (بدهی‌ها)', 'liability', null],
+      ['401', 'درآمدهای پروژه و خدمات', 'revenue', null],
+      ['501', 'هزینه‌های ساخت و جاری', 'expense', null],
+      ['301', 'سرمایه و جاری شرکا', 'equity', null]
     ];
-    defaultCats.forEach(c => insertCat.run(c[0], c[1], c[2], c[3]));
+    defaultAccounts.forEach(acc => insertAcc.run(acc[0], acc[1], acc[2], acc[3]));
   }
 }
 

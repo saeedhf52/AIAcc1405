@@ -2,6 +2,8 @@ const axios = require('axios');
 const db = require('../config/database');
 const { getFormattedJalaliDate, normalizeNumbers, parseAmount } = require('./jalaliUtils');
 const { recalculateLedgerForParty } = require('./ledgerService');
+const { createJournalVoucherForTransaction } = require('./accountingService');
+const { findMatchingParty } = require('./partyMatcher');
 
 const API_URL = process.env.AI_API_BASE_URL || 'https://saeed-9router-cloud.onrender.com/v1/chat/completions';
 const API_KEY = process.env.AI_API_KEY || 'sk-433b65e8f172ca9a-6cijkx-4d45e864';
@@ -110,7 +112,7 @@ async function processInputWithAI(inputType, content) {
     );
 
     // اجرای اکشن براساس Intent
-    return await executeAIIntent(data);
+    return await executeAIIntent(data, inputType);
 
   } catch (err) {
     console.error('[AIService] خطا در پردازش:', err.message);
@@ -126,7 +128,7 @@ async function processInputWithAI(inputType, content) {
   }
 }
 
-async function executeAIIntent(data) {
+async function executeAIIntent(data, inputType = 'text') {
   const todayJalali = getFormattedJalaliDate();
 
   // 1. شفاف‌سازی
@@ -172,7 +174,7 @@ async function executeAIIntent(data) {
     };
   }
 
-  // 3. ثبت تراکنش دستی
+  // 3. ثبت تراکنش دستی همراه با چک تشابه اسمی شخص
   if (data.intent === 'TRANSACTION') {
     const t = data.transaction;
     if (!t || !t.name || !t.amount) {
@@ -182,33 +184,43 @@ async function executeAIIntent(data) {
       };
     }
 
-    const partyName = normalizeNumbers(t.name);
+    const extractedName = normalizeNumbers(t.name);
     const amount = parseAmount(t.amount);
     const formattedDate = getFormattedJalaliDate(t.date || todayJalali);
     const txType = t.type || 'ایجاد بدهی';
 
-    // ثبت یا یافتن طرف حساب
-    db.prepare('INSERT OR IGNORE INTO parties (name) VALUES (?)').run(partyName);
-    const partyObj = db.prepare('SELECT id FROM parties WHERE name = ?').get(partyName);
-    const partyId = partyObj ? partyObj.id : null;
+    // بررسی تشابه اسمی با اشخاص موجود در دیتابیس
+    const matchResult = findMatchingParty(extractedName);
 
-    const res = db.prepare(`
-      INSERT INTO transactions (date, type, party_id, party_name, amount, description, tracking_code)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(formattedDate, txType, partyId, partyName, amount, t.description || '', normalizeNumbers(t.tracking || ''));
+    if (matchResult.action === 'CONFIRM') {
+      // ثبت در pending_confirmations جهت اخذ تاییدیه از کاربر
+      const stmt = db.prepare(`
+        INSERT INTO pending_confirmations (input_type, suggested_party_name, candidate_party_id, candidate_party_name, similarity_score, intent_data)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `);
+      const info = stmt.run(
+        inputType,
+        extractedName,
+        matchResult.party.id,
+        matchResult.party.name,
+        matchResult.score,
+        JSON.stringify(data)
+      );
 
-    recalculateLedgerForParty(partyName);
+      return {
+        success: true,
+        intent: 'CONFIRM_PARTY',
+        pendingId: info.lastInsertRowid,
+        extractedName: extractedName,
+        candidateParty: matchResult.party,
+        similarityScore: Math.round(matchResult.score * 100),
+        message: `🔍 تشابه اسمی پیدا شد:\nآیا منظور شما **${matchResult.party.name}** است یا شخص جدیدی به نام **${extractedName}** ایجاد شود؟`
+      };
+    }
 
-    return {
-      success: true,
-      intent: 'TRANSACTION',
-      transactionId: res.lastInsertRowid,
-      message: `✅ تراکنش جدید ثبت شد!\n` +
-               `👤 شخص: **${partyName}**\n` +
-               `🏷️ نوع: **${txType}**\n` +
-               `💰 مبلغ: **${Number(amount).toLocaleString('fa-IR')} ریال** (${Number(amount / 10).toLocaleString('fa-IR')} تومان)\n` +
-               `📅 تاریخ: ${formattedDate}`
-    };
+    // اگر شخص کاملاً مشخص یا 100% تطابق داشت، ثبت مستقیم انجام می‌شود
+    const finalPartyName = matchResult.action === 'EXACT' ? matchResult.party.name : extractedName;
+    return commitTransactionData(formattedDate, txType, finalPartyName, amount, t.description, t.tracking);
   }
 
   // 4. ثبت رسید بانکی
@@ -281,6 +293,47 @@ async function executeAIIntent(data) {
   };
 }
 
+// ثبت نهایی تراکنش در دیتابیس و صدور خودکار سند حسابداری دوبل
+function commitTransactionData(date, type, partyName, amount, description, trackingCode) {
+  db.prepare('INSERT OR IGNORE INTO parties (name) VALUES (?)').run(partyName);
+  const partyObj = db.prepare('SELECT id FROM parties WHERE name = ?').get(partyName);
+  const partyId = partyObj ? partyObj.id : null;
+
+  const res = db.prepare(`
+    INSERT INTO transactions (date, type, party_id, party_name, amount, description, tracking_code)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(date, type, partyId, partyName, amount, description || '', normalizeNumbers(trackingCode || ''));
+
+  const txId = res.lastInsertRowid;
+
+  // ۱. بروزرسانی خلاصه دفتر حساب
+  recalculateLedgerForParty(partyName);
+
+  // ۲. صدور سند حسابداری دوبل خودکار
+  const voucherId = createJournalVoucherForTransaction({
+    id: txId,
+    date,
+    type,
+    party_id: partyId,
+    party_name: partyName,
+    amount,
+    description: description || ''
+  });
+
+  return {
+    success: true,
+    intent: 'TRANSACTION',
+    transactionId: txId,
+    voucherId,
+    message: `✅ تراکنش جدید ثبت و سند دوبل شماره #${voucherId} صادر شد!\n` +
+             `👤 شخص: **${partyName}**\n` +
+             `🏷️ نوع: **${type}**\n` +
+             `💰 مبلغ: **${Number(amount).toLocaleString('fa-IR')} ریال** (${Number(amount / 10).toLocaleString('fa-IR')} تومان)\n` +
+             `📅 تاریخ: ${date}`
+  };
+}
+
 module.exports = {
-  processInputWithAI
+  processInputWithAI,
+  commitTransactionData
 };

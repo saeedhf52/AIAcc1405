@@ -2,14 +2,15 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const db = require('../config/database');
-const { processInputWithAI } = require('../services/aiService');
-const { recalculateLedgerForParty, recalculateAllLedgers } = require('../services/ledgerService');
+const { processInputWithAI, commitTransactionData } = require('../services/aiService');
+const { recalculateLedgerForParty } = require('../services/ledgerService');
 const { getFormattedJalaliDate, normalizeNumbers, parseAmount } = require('../services/jalaliUtils');
+const { createJournalVoucherForTransaction, getGeneralJournal, getGeneralLedger, getSubsidiaryLedger, getTrialBalance } = require('../services/accountingService');
+const { getUnreconciledReceipts, getOpenTransactions, runAutoReconciliation, manualReconcile, getAllReconciliations } = require('../services/reconciliationService');
 
-// تنظیمات آپلود فایل صوتی ویس در حافظه
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 } // حداکثر 10 مگابایت
+  limits: { fileSize: 10 * 1024 * 1024 }
 });
 
 // --- API هوش مصنوعی ---
@@ -36,12 +37,128 @@ router.post('/ai/process', upload.single('audio'), async (req, res) => {
   }
 });
 
+// --- تاییدیه تشابه اسمی اشخاص (Party Confirmation Response) ---
+router.post('/ai/confirm-party', (req, res) => {
+  try {
+    const { pendingId, choice, partyName } = req.body;
+    // choice: 'EXISTING' یا 'NEW'
+    const pending = db.prepare('SELECT * FROM pending_confirmations WHERE id = ?').get(pendingId);
+
+    if (!pending) {
+      return res.status(404).json({ success: false, message: 'تاییدیه مورد نظر یافت نشد یا قبلا نهایی شده است.' });
+    }
+
+    const intentData = JSON.parse(pending.intent_data);
+    const t = intentData.transaction;
+    const finalName = choice === 'EXISTING' ? pending.candidate_party_name : (partyName || pending.suggested_party_name);
+
+    // ثبت نهایی تراکنش
+    const result = commitTransactionData(
+      getFormattedJalaliDate(t.date),
+      t.type || 'ایجاد بدهی',
+      finalName,
+      parseAmount(t.amount),
+      t.description || '',
+      t.tracking || ''
+    );
+
+    // به روزرسانی وضع تاییدیه
+    db.prepare("UPDATE pending_confirmations SET status = ? WHERE id = ?").run(
+      choice === 'EXISTING' ? 'confirmed_existing' : 'created_new',
+      pendingId
+    );
+
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// --- گزارشات حسابداری دوبل (Double-Entry Reports) ---
+router.get('/accounting/journal', (req, res) => {
+  try {
+    const journal = getGeneralJournal();
+    res.json({ success: true, data: journal });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.get('/accounting/general-ledger', (req, res) => {
+  try {
+    const { account_id } = req.query;
+    const ledger = getGeneralLedger(account_id);
+    res.json({ success: true, data: ledger });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.get('/accounting/subsidiary-ledger', (req, res) => {
+  try {
+    const { party_id } = req.query;
+    const ledger = getSubsidiaryLedger(party_id);
+    res.json({ success: true, data: ledger });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.get('/accounting/trial-balance', (req, res) => {
+  try {
+    const trial = getTrialBalance();
+    res.json({ success: true, data: trial });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// --- مغایرت‌یابی و اقلام باز (Reconciliation API) ---
+router.get('/reconciliation/unreconciled', (req, res) => {
+  try {
+    const receipts = getUnreconciledReceipts();
+    const transactions = getOpenTransactions();
+    const matches = getAllReconciliations();
+
+    res.json({
+      success: true,
+      data: {
+        receipts,
+        transactions,
+        matches
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.post('/reconciliation/auto-match', (req, res) => {
+  try {
+    const result = runAutoReconciliation();
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.post('/reconciliation/manual-match', (req, res) => {
+  try {
+    const { receipt_id, transaction_id } = req.body;
+    const result = manualReconcile(receipt_id, transaction_id);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // --- آمار و شاخص‌های خلاصه داشبورد (KPIs) ---
 router.get('/dashboard/summary', (req, res) => {
   try {
     const totalTransactions = db.prepare('SELECT COUNT(*) as count FROM transactions').get().count;
     const totalReceipts = db.prepare('SELECT COUNT(*) as count FROM receipts').get().count;
     const totalParties = db.prepare('SELECT COUNT(*) as count FROM parties').get().count;
+    const totalVouchers = db.prepare('SELECT COUNT(*) as count FROM journal_vouchers').get().count;
 
     const ledgerSummary = db.prepare(`
       SELECT
@@ -51,15 +168,8 @@ router.get('/dashboard/summary', (req, res) => {
       FROM ledger_summaries
     `).get();
 
-    // 5 تراکنش اخیر
-    const recentTransactions = db.prepare(`
-      SELECT * FROM transactions ORDER BY id DESC LIMIT 5
-    `).all();
-
-    // 5 طرف حساب با بیشترین طلب/مانده
-    const topDebtors = db.prepare(`
-      SELECT party_name, balance FROM ledger_summaries ORDER BY balance DESC LIMIT 5
-    `).all();
+    const recentTransactions = db.prepare('SELECT * FROM transactions ORDER BY id DESC LIMIT 5').all();
+    const topDebtors = db.prepare('SELECT party_name, balance FROM ledger_summaries ORDER BY balance DESC LIMIT 5').all();
 
     res.json({
       success: true,
@@ -67,6 +177,7 @@ router.get('/dashboard/summary', (req, res) => {
         totalTransactions,
         totalReceipts,
         totalParties,
+        totalVouchers,
         totalClaim: ledgerSummary.totalClaim || 0,
         totalPaid: ledgerSummary.totalPaid || 0,
         totalBalance: ledgerSummary.totalBalance || 0,
@@ -118,18 +229,8 @@ router.post('/transactions', (req, res) => {
     const parsedAmt = parseAmount(amount);
     const formattedDate = getFormattedJalaliDate(date);
 
-    db.prepare('INSERT OR IGNORE INTO parties (name) VALUES (?)').run(normParty);
-    const partyObj = db.prepare('SELECT id FROM parties WHERE name = ?').get(normParty);
-    const partyId = partyObj ? partyObj.id : null;
-
-    const info = db.prepare(`
-      INSERT INTO transactions (date, type, party_id, party_name, amount, description, tracking_code)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(formattedDate, type || 'ایجاد بدهی', partyId, normParty, parsedAmt, normalizeNumbers(description || ''), normalizeNumbers(tracking_code || ''));
-
-    recalculateLedgerForParty(normParty);
-
-    res.json({ success: true, id: info.lastInsertRowid, message: 'تراکنش با موفقیت ثبت شد.' });
+    const result = commitTransactionData(formattedDate, type || 'ایجاد بدهی', normParty, parsedAmt, description, tracking_code);
+    res.json(result);
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -148,7 +249,7 @@ router.delete('/transactions/:id', (req, res) => {
   }
 });
 
-// --- رسیدها (Receipts) ---
+// --- سایر APIها ---
 router.get('/receipts', (req, res) => {
   try {
     const rows = db.prepare('SELECT * FROM receipts ORDER BY id DESC').all();
@@ -158,7 +259,6 @@ router.get('/receipts', (req, res) => {
   }
 });
 
-// --- دفتر حساب (Ledger Summaries) ---
 router.get('/ledger', (req, res) => {
   try {
     const rows = db.prepare('SELECT * FROM ledger_summaries ORDER BY balance DESC').all();
@@ -168,7 +268,6 @@ router.get('/ledger', (req, res) => {
   }
 });
 
-// --- اشخاص (Parties) ---
 router.get('/parties', (req, res) => {
   try {
     const rows = db.prepare('SELECT * FROM parties ORDER BY name ASC').all();
@@ -178,7 +277,6 @@ router.get('/parties', (req, res) => {
   }
 });
 
-// --- دسته‌بندی‌ها و بودجه‌ها ---
 router.get('/categories', (req, res) => {
   try {
     const rows = db.prepare('SELECT * FROM categories').all();
@@ -188,7 +286,6 @@ router.get('/categories', (req, res) => {
   }
 });
 
-// --- لاگ‌های هوش مصنوعی (AI Logs) ---
 router.get('/ai/logs', (req, res) => {
   try {
     const rows = db.prepare('SELECT * FROM ai_logs ORDER BY id DESC LIMIT 20').all();
