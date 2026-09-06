@@ -3,9 +3,9 @@ const router = express.Router();
 const multer = require('multer');
 const db = require('../config/database');
 const { processInputWithAI, commitTransactionData } = require('../services/aiService');
-const { recalculateLedgerForParty } = require('../services/ledgerService');
+const { recalculateLedgerForParty, renamePartyInLedger } = require('../services/ledgerService');
 const { getFormattedJalaliDate, normalizeNumbers, parseAmount } = require('../services/jalaliUtils');
-const { createJournalVoucherForTransaction, getGeneralJournal, getGeneralLedger, getSubsidiaryLedger, getTrialBalance } = require('../services/accountingService');
+const { createJournalVoucherForTransaction, createJournalVoucherForReceipt, updateJournalVoucherForTransaction, updateJournalVoucherForReceipt, deleteJournalVoucherForSource, getGeneralJournal, getGeneralLedger, getSubsidiaryLedger, getTrialBalance } = require('../services/accountingService');
 const { getUnreconciledReceipts, getOpenTransactions, runAutoReconciliation, manualReconcile, getAllReconciliations } = require('../services/reconciliationService');
 
 const upload = multer({
@@ -236,10 +236,52 @@ router.post('/transactions', (req, res) => {
   }
 });
 
+router.put('/transactions/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { date, type, party_name, amount, description, tracking_code } = req.body;
+    if (!party_name || !amount) {
+      return res.status(400).json({ success: false, message: 'نام طرف حساب و مبلغ الزامی است.' });
+    }
+
+    const oldTx = db.prepare('SELECT * FROM transactions WHERE id = ?').get(id);
+    if (!oldTx) {
+      return res.status(404).json({ success: false, message: 'تراکنش یافت نشد.' });
+    }
+
+    const normParty = normalizeNumbers(party_name);
+    const parsedAmt = parseAmount(amount);
+    const formattedDate = getFormattedJalaliDate(date);
+
+    db.prepare('INSERT OR IGNORE INTO parties (name) VALUES (?)').run(normParty);
+    const partyObj = db.prepare('SELECT id FROM parties WHERE name = ?').get(normParty);
+    const partyId = partyObj ? partyObj.id : null;
+
+    db.prepare(`
+      UPDATE transactions
+      SET date = ?, type = ?, party_id = ?, party_name = ?, amount = ?, description = ?, tracking_code = ?
+      WHERE id = ?
+    `).run(formattedDate, type || 'ایجاد بدهی', partyId, normParty, parsedAmt, description || '', normalizeNumbers(tracking_code || ''), id);
+
+    recalculateLedgerForParty(oldTx.party_name);
+    if (oldTx.party_name !== normParty) {
+      recalculateLedgerForParty(normParty);
+    }
+
+    const updatedTx = db.prepare('SELECT * FROM transactions WHERE id = ?').get(id);
+    updateJournalVoucherForTransaction(updatedTx);
+
+    res.json({ success: true, message: 'تراکنش با موفقیت ویرایش شد.' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 router.delete('/transactions/:id', (req, res) => {
   try {
     const tx = db.prepare('SELECT party_name FROM transactions WHERE id = ?').get(req.params.id);
     if (tx) {
+      deleteJournalVoucherForSource('TRANSACTION', req.params.id);
       db.prepare('DELETE FROM transactions WHERE id = ?').run(req.params.id);
       recalculateLedgerForParty(tx.party_name);
     }
@@ -249,7 +291,7 @@ router.delete('/transactions/:id', (req, res) => {
   }
 });
 
-// --- سایر APIها ---
+// --- مدیریت رسیدها (Receipts API) ---
 router.get('/receipts', (req, res) => {
   try {
     const rows = db.prepare('SELECT * FROM receipts ORDER BY id DESC').all();
@@ -259,19 +301,187 @@ router.get('/receipts', (req, res) => {
   }
 });
 
-router.get('/ledger', (req, res) => {
+router.post('/receipts', (req, res) => {
   try {
-    const rows = db.prepare('SELECT * FROM ledger_summaries ORDER BY balance DESC').all();
+    const { date, party_name, amount, account_number, source, document_number, description } = req.body;
+    if (!amount) {
+      return res.status(400).json({ success: false, message: 'مبلغ الزامی است.' });
+    }
+
+    const normParty = normalizeNumbers(party_name || '');
+    const parsedAmt = parseAmount(amount);
+    const formattedDate = getFormattedJalaliDate(date);
+    const docNum = normalizeNumbers(document_number || '');
+
+    let partyId = null;
+    if (normParty) {
+      db.prepare('INSERT OR IGNORE INTO parties (name) VALUES (?)').run(normParty);
+      const partyObj = db.prepare('SELECT id FROM parties WHERE name = ?').get(normParty);
+      if (partyObj) partyId = partyObj.id;
+    }
+
+    const isSpecificDoc = docNum && docNum.length > 3 && !['چک', 'فیش', 'پایا', 'ساتنا', 'حواله', 'کارت'].includes(docNum);
+    const dedupHash = isSpecificDoc ? `DOC_${docNum}` : `REC_${formattedDate}_${parsedAmt}_${normParty}`;
+
+    const info = db.prepare(`
+      INSERT INTO receipts
+      (date, description, party_name, party_id, account_number, amount, source, document_number, dedup_hash)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      formattedDate,
+      normalizeNumbers(description || ''),
+      normParty,
+      partyId,
+      normalizeNumbers(account_number || ''),
+      parsedAmt,
+      normalizeNumbers(source || ''),
+      docNum,
+      dedupHash
+    );
+
+    const receiptId = info.lastInsertRowid;
+    if (normParty) recalculateLedgerForParty(normParty);
+
+    const newReceipt = db.prepare('SELECT * FROM receipts WHERE id = ?').get(receiptId);
+    createJournalVoucherForReceipt(newReceipt);
+
+    res.json({ success: true, message: 'رسید واریزی با موفقیت ثبت شد.', data: newReceipt });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.put('/receipts/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { date, party_name, amount, account_number, source, document_number, description } = req.body;
+
+    const oldReceipt = db.prepare('SELECT * FROM receipts WHERE id = ?').get(id);
+    if (!oldReceipt) {
+      return res.status(404).json({ success: false, message: 'رسید مورد نظر یافت نشد.' });
+    }
+
+    const normParty = normalizeNumbers(party_name || '');
+    const parsedAmt = parseAmount(amount);
+    const formattedDate = getFormattedJalaliDate(date);
+    const docNum = normalizeNumbers(document_number || '');
+
+    let partyId = null;
+    if (normParty) {
+      db.prepare('INSERT OR IGNORE INTO parties (name) VALUES (?)').run(normParty);
+      const partyObj = db.prepare('SELECT id FROM parties WHERE name = ?').get(normParty);
+      if (partyObj) partyId = partyObj.id;
+    }
+
+    const isSpecificDoc = docNum && docNum.length > 3 && !['چک', 'فیش', 'پایا', 'ساتنا', 'حواله', 'کارت'].includes(docNum);
+    const dedupHash = isSpecificDoc ? `DOC_${docNum}` : `REC_${formattedDate}_${parsedAmt}_${normParty}`;
+
+    db.prepare(`
+      UPDATE receipts
+      SET date = ?, party_name = ?, party_id = ?, amount = ?, account_number = ?, source = ?, document_number = ?, description = ?, dedup_hash = ?
+      WHERE id = ?
+    `).run(
+      formattedDate,
+      normParty,
+      partyId,
+      parsedAmt,
+      normalizeNumbers(account_number || ''),
+      normalizeNumbers(source || ''),
+      docNum,
+      normalizeNumbers(description || ''),
+      dedupHash,
+      id
+    );
+
+    if (oldReceipt.party_name) recalculateLedgerForParty(oldReceipt.party_name);
+    if (normParty && normParty !== oldReceipt.party_name) recalculateLedgerForParty(normParty);
+
+    const updatedReceipt = db.prepare('SELECT * FROM receipts WHERE id = ?').get(id);
+    updateJournalVoucherForReceipt(updatedReceipt);
+
+    res.json({ success: true, message: 'رسید واریزی با موفقیت ویرایش شد.' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.delete('/receipts/:id', (req, res) => {
+  try {
+    const receipt = db.prepare('SELECT * FROM receipts WHERE id = ?').get(req.params.id);
+    if (receipt) {
+      deleteJournalVoucherForSource('RECEIPT', req.params.id);
+      db.prepare('DELETE FROM receipts WHERE id = ?').run(req.params.id);
+      if (receipt.party_name) recalculateLedgerForParty(receipt.party_name);
+    }
+    res.json({ success: true, message: 'رسید واریزی حذف شد.' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// --- مدیریت اشخاص (Parties API) ---
+router.get('/parties', (req, res) => {
+  try {
+    const rows = db.prepare('SELECT * FROM parties ORDER BY name ASC').all();
     res.json({ success: true, data: rows });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 });
 
-router.get('/parties', (req, res) => {
+router.post('/parties', (req, res) => {
   try {
-    const rows = db.prepare('SELECT * FROM parties ORDER BY name ASC').all();
-    res.json({ success: true, data: rows });
+    const { name, phone, notes } = req.body;
+    if (!name) {
+      return res.status(400).json({ success: false, message: 'نام شخص الزامی است.' });
+    }
+    const normName = normalizeNumbers(name);
+    const info = db.prepare('INSERT INTO parties (name, phone, notes) VALUES (?, ?, ?)').run(normName, phone || '', notes || '');
+    recalculateLedgerForParty(normName);
+    res.json({ success: true, message: 'شخص جدید با موفقیت ایجاد شد.', partyId: info.lastInsertRowid });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.put('/parties/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, phone, notes } = req.body;
+    if (!name) {
+      return res.status(400).json({ success: false, message: 'نام شخص الزامی است.' });
+    }
+
+    const party = db.prepare('SELECT * FROM parties WHERE id = ?').get(id);
+    if (!party) {
+      return res.status(404).json({ success: false, message: 'شخص مورد نظر یافت نشد.' });
+    }
+
+    const normName = normalizeNumbers(name);
+    db.prepare('UPDATE parties SET name = ?, phone = ?, notes = ? WHERE id = ?').run(normName, phone || '', notes || '', id);
+
+    if (party.name !== normName) {
+      renamePartyInLedger(party.name, normName, id);
+    } else {
+      recalculateLedgerForParty(normName);
+    }
+
+    res.json({ success: true, message: 'اطلاعات شخص با موفقیت به‌روزرسانی شد.' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.delete('/parties/:id', (req, res) => {
+  try {
+    const party = db.prepare('SELECT * FROM parties WHERE id = ?').get(req.params.id);
+    if (party) {
+      db.prepare('UPDATE transactions SET party_id = NULL WHERE party_id = ?').run(req.params.id);
+      db.prepare('UPDATE receipts SET party_id = NULL WHERE party_id = ?').run(req.params.id);
+      db.prepare('DELETE FROM ledger_summaries WHERE party_id = ? OR party_name = ?').run(req.params.id, party.name);
+      db.prepare('DELETE FROM parties WHERE id = ?').run(req.params.id);
+    }
+    res.json({ success: true, message: 'شخص حذف شد.' });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

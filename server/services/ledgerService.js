@@ -48,7 +48,19 @@ function recalculateAllLedgers() {
   parties.forEach(p => recalculateLedgerForParty(p.name));
 }
 
+// تغییر نام طرف حساب در تمامی تراکنش‌ها، رسیدها و دفتر حساب
+function renamePartyInLedger(oldName, newName, partyId) {
+  if (!oldName || !newName || oldName === newName) return;
+
+  db.prepare('UPDATE transactions SET party_name = ?, party_id = ? WHERE party_name = ?').run(newName, partyId, oldName);
+  db.prepare('UPDATE receipts SET party_name = ?, party_id = ? WHERE party_name = ?').run(newName, partyId, oldName);
+  db.prepare('DELETE FROM ledger_summaries WHERE party_name = ?').run(oldName);
+
+  recalculateLedgerForParty(newName);
+}
+
 module.exports = {
   recalculateLedgerForParty,
-  recalculateAllLedgers
+  recalculateAllLedgers,
+  renamePartyInLedger
 };

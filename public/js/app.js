@@ -1,11 +1,13 @@
 let currentCurrency = 'IRR'; // 'IRR' یا 'TOMAN'
 let ledgerChart = null;
+let tableSort = { table: '', col: '', dir: 'asc' };
 
 let rawData = {
   summary: null,
   transactions: [],
   receipts: [],
   ledger: [],
+  parties: [],
   aiLogs: [],
   journal: [],
   trialBalance: [],
@@ -19,7 +21,50 @@ let isRecording = false;
 document.addEventListener('DOMContentLoaded', () => {
   lucide.createIcons();
   loadAllData();
+  setupPartyComboboxes();
 });
+
+function showToast(message, type = 'success') {
+  const container = document.getElementById('toast-container');
+  if (!container) return;
+  const toast = document.createElement('div');
+  const bgColors = {
+    success: 'bg-emerald-600 text-white shadow-emerald-500/30',
+    error: 'bg-rose-600 text-white shadow-rose-500/30',
+    info: 'bg-cyan-600 text-white shadow-cyan-500/30'
+  };
+  toast.className = `pointer-events-auto px-4 py-2.5 rounded-xl text-xs font-bold shadow-lg transition-all transform duration-300 translate-y-2 opacity-0 flex items-center gap-2 ${bgColors[type] || bgColors.success}`;
+  toast.innerHTML = message;
+  container.appendChild(toast);
+  setTimeout(() => { toast.classList.remove('translate-y-2', 'opacity-0'); }, 10);
+  setTimeout(() => {
+    toast.classList.add('opacity-0', '-translate-y-2');
+    setTimeout(() => toast.remove(), 300);
+  }, 3500);
+}
+
+function sortTable(tableName, colName) {
+  if (tableSort.table === tableName && tableSort.col === colName) {
+    tableSort.dir = tableSort.dir === 'asc' ? 'desc' : 'asc';
+  } else {
+    tableSort.table = tableName;
+    tableSort.col = colName;
+    tableSort.dir = 'asc';
+  }
+  const dataList = rawData[tableName] || [];
+  dataList.sort((a, b) => {
+    let valA = a[colName] ?? '';
+    let valB = b[colName] ?? '';
+    if (typeof valA === 'number' && typeof valB === 'number') {
+      return tableSort.dir === 'asc' ? valA - valB : valB - valA;
+    }
+    valA = String(valA).toLowerCase();
+    valB = String(valB).toLowerCase();
+    return tableSort.dir === 'asc' ? valA.localeCompare(valB, 'fa') : valB.localeCompare(valA, 'fa');
+  });
+  renderAllViews();
+  showToast(`مرتب‌سازی بر اساس ${colName} (${tableSort.dir === 'asc' ? 'صعودی 🔼' : 'نزولی 🔻'})`, 'info');
+}
 
 function toggleCurrency() {
   currentCurrency = currentCurrency === 'IRR' ? 'TOMAN' : 'IRR';
@@ -44,7 +89,7 @@ function formatMoney(amount) {
 
 async function loadAllData() {
   try {
-    const [sumRes, txRes, recRes, ledRes, aiRes, journalRes, trialRes, reconRes] = await Promise.all([
+    const [sumRes, txRes, recRes, ledRes, aiRes, journalRes, trialRes, reconRes, partyRes] = await Promise.all([
       fetch('/api/dashboard/summary').then(r => r.json()),
       fetch('/api/transactions').then(r => r.json()),
       fetch('/api/receipts').then(r => r.json()),
@@ -52,7 +97,8 @@ async function loadAllData() {
       fetch('/api/ai/logs').then(r => r.json()),
       fetch('/api/accounting/journal').then(r => r.json()),
       fetch('/api/accounting/trial-balance').then(r => r.json()),
-      fetch('/api/reconciliation/unreconciled').then(r => r.json())
+      fetch('/api/reconciliation/unreconciled').then(r => r.json()),
+      fetch('/api/parties').then(r => r.json())
     ]);
 
     if (sumRes.success) rawData.summary = sumRes.data;
@@ -63,8 +109,10 @@ async function loadAllData() {
     if (journalRes.success) rawData.journal = journalRes.data;
     if (trialRes.success) rawData.trialBalance = trialRes.data;
     if (reconRes.success) rawData.reconciliation = reconRes.data;
+    if (partyRes && partyRes.success) rawData.parties = partyRes.data;
 
     renderAllViews();
+    updatePartyComboboxOptions();
   } catch (err) {
     console.error('خطا در دریافت داده‌ها:', err);
   }
@@ -188,6 +236,7 @@ function renderRecentTransactions() {
 // 5. جدول تراکنش‌ها
 function renderAllTransactionsTable() {
   const tbody = document.getElementById('all-tx-tbody');
+  if (!tbody) return;
   tbody.innerHTML = '';
   if (!rawData.transactions) return;
 
@@ -204,8 +253,11 @@ function renderAllTransactionsTable() {
       <td class="p-3 font-bold text-slate-100">${formatMoney(tx.amount)} ${currentCurrency === 'IRR' ? 'ریال' : 'تومان'}</td>
       <td class="p-3 text-slate-400 max-w-xs truncate">${tx.description || '-'}</td>
       <td class="p-3 text-slate-500">${tx.tracking_code || '-'}</td>
-      <td class="p-3 text-center">
-        <button onclick="deleteTransaction(${tx.id})" class="text-rose-400 hover:text-rose-300 p-1">
+      <td class="p-3 text-center flex items-center justify-center gap-1">
+        <button onclick="editTransaction(${tx.id})" class="text-cyan-400 hover:text-cyan-300 p-1" title="ویرایش تراکنش">
+          <i data-lucide="edit-3" class="w-4 h-4"></i>
+        </button>
+        <button onclick="deleteTransaction(${tx.id})" class="text-rose-400 hover:text-rose-300 p-1" title="حذف تراکنش">
           <i data-lucide="trash-2" class="w-4 h-4"></i>
         </button>
       </td>
@@ -218,6 +270,7 @@ function renderAllTransactionsTable() {
 // 6. جدول رسیدها
 function renderAllReceiptsTable() {
   const tbody = document.getElementById('all-receipts-tbody');
+  if (!tbody) return;
   tbody.innerHTML = '';
   if (!rawData.receipts) return;
 
@@ -233,14 +286,24 @@ function renderAllReceiptsTable() {
       <td class="p-3 text-slate-400 font-mono text-[11px]">${r.source || '-'}</td>
       <td class="p-3 text-slate-300 font-mono text-[11px]">${r.document_number || '-'}</td>
       <td class="p-3 text-slate-400 max-w-xs truncate">${r.description || '-'}</td>
+      <td class="p-3 text-center flex items-center justify-center gap-1">
+        <button onclick="editReceipt(${r.id})" class="text-cyan-400 hover:text-cyan-300 p-1" title="ویرایش رسید">
+          <i data-lucide="edit-3" class="w-4 h-4"></i>
+        </button>
+        <button onclick="deleteReceipt(${r.id})" class="text-rose-400 hover:text-rose-300 p-1" title="حذف رسید">
+          <i data-lucide="trash-2" class="w-4 h-4"></i>
+        </button>
+      </td>
     `;
     tbody.appendChild(tr);
   });
+  lucide.createIcons();
 }
 
 // 7. جدول دفتر حساب
 function renderAllLedgerTable() {
   const tbody = document.getElementById('all-ledger-tbody');
+  if (!tbody) return;
   tbody.innerHTML = '';
   if (!rawData.ledger) return;
 
@@ -257,9 +320,18 @@ function renderAllLedgerTable() {
           ${l.balance > 0 ? 'دارای مانده طلب' : 'تسویه شده'}
         </span>
       </td>
+      <td class="p-3 text-center flex items-center justify-center gap-1">
+        <button onclick="editPartyByName('${l.party_name}')" class="text-cyan-400 hover:text-cyan-300 p-1" title="ویرایش شخص">
+          <i data-lucide="edit-3" class="w-4 h-4"></i>
+        </button>
+        <button onclick="deletePartyByName('${l.party_name}')" class="text-rose-400 hover:text-rose-300 p-1" title="حذف شخص">
+          <i data-lucide="trash-2" class="w-4 h-4"></i>
+        </button>
+      </td>
     `;
     tbody.appendChild(tr);
   });
+  lucide.createIcons();
 }
 
 // 8. دفتر روزنامه حسابداری دوبل
@@ -655,9 +727,32 @@ function toggleChatMinimize() {
   icon.classList.toggle('rotate-180');
 }
 
+// --- مدیریت تراکنش‌ها (Create & Edit & Delete) ---
 function openNewTxModal() {
-  document.getElementById('tx-modal').classList.remove('hidden');
+  document.getElementById('tx-modal-title').textContent = 'ثبت تراکنش دستی جدید';
+  document.getElementById('modal-tx-id').value = '';
   document.getElementById('modal-date').value = new Date().toLocaleDateString('fa-IR');
+  document.getElementById('modal-type').value = 'ایجاد بدهی';
+  document.getElementById('modal-party').value = '';
+  document.getElementById('modal-amount').value = '';
+  document.getElementById('modal-desc').value = '';
+  document.getElementById('modal-tracking').value = '';
+  document.getElementById('tx-modal').classList.remove('hidden');
+}
+
+function editTransaction(id) {
+  const tx = rawData.transactions.find(t => t.id === id);
+  if (!tx) return;
+
+  document.getElementById('tx-modal-title').textContent = `ویرایش تراکنش شماره #${id}`;
+  document.getElementById('modal-tx-id').value = tx.id;
+  document.getElementById('modal-date').value = tx.date || '';
+  document.getElementById('modal-type').value = tx.type || 'ایجاد بدهی';
+  document.getElementById('modal-party').value = tx.party_name || '';
+  document.getElementById('modal-amount').value = tx.amount || '';
+  document.getElementById('modal-desc').value = tx.description || '';
+  document.getElementById('modal-tracking').value = tx.tracking_code || '';
+  document.getElementById('tx-modal').classList.remove('hidden');
 }
 
 function closeNewTxModal() {
@@ -666,6 +761,7 @@ function closeNewTxModal() {
 
 async function submitNewTx(e) {
   e.preventDefault();
+  const txId = document.getElementById('modal-tx-id').value;
   const payload = {
     date: document.getElementById('modal-date').value,
     type: document.getElementById('modal-type').value,
@@ -675,16 +771,222 @@ async function submitNewTx(e) {
     tracking_code: document.getElementById('modal-tracking').value
   };
 
-  const res = await fetch('/api/transactions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  }).then(r => r.json());
+  const url = txId ? `/api/transactions/${txId}` : '/api/transactions';
+  const method = txId ? 'PUT' : 'POST';
 
-  if (res.success) {
-    closeNewTxModal();
-    loadAllData();
-  } else {
-    alert(res.message);
+  try {
+    const res = await fetch(url, {
+      method: method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    }).then(r => r.json());
+
+    if (res.success) {
+      showToast(res.message || 'تراکنش با موفقیت ذخیره شد.', 'success');
+      closeNewTxModal();
+      loadAllData();
+    } else {
+      showToast(res.message || 'خطا در ثبت تراکنش', 'error');
+    }
+  } catch (err) {
+    showToast('خطا در ارتباط با سرور', 'error');
   }
+}
+
+// --- مدیریت رسیدها (Modal & CRUD) ---
+function openReceiptModal() {
+  document.getElementById('receipt-modal-title').textContent = 'ثبت رسید واریزی جدید';
+  document.getElementById('receipt-modal-id').value = '';
+  document.getElementById('receipt-modal-date').value = new Date().toLocaleDateString('fa-IR');
+  document.getElementById('receipt-modal-party').value = '';
+  document.getElementById('receipt-modal-amount').value = '';
+  document.getElementById('receipt-modal-account').value = '';
+  document.getElementById('receipt-modal-source').value = '';
+  document.getElementById('receipt-modal-doc').value = '';
+  document.getElementById('receipt-modal-desc').value = '';
+  document.getElementById('receipt-modal').classList.remove('hidden');
+}
+
+function editReceipt(id) {
+  const receipt = rawData.receipts.find(r => r.id === id);
+  if (!receipt) return;
+
+  document.getElementById('receipt-modal-title').textContent = `ویرایش رسید واریزی #${id}`;
+  document.getElementById('receipt-modal-id').value = receipt.id;
+  document.getElementById('receipt-modal-date').value = receipt.date || '';
+  document.getElementById('receipt-modal-party').value = receipt.party_name || '';
+  document.getElementById('receipt-modal-amount').value = receipt.amount || '';
+  document.getElementById('receipt-modal-account').value = receipt.account_number || '';
+  document.getElementById('receipt-modal-source').value = receipt.source || '';
+  document.getElementById('receipt-modal-doc').value = receipt.document_number || '';
+  document.getElementById('receipt-modal-desc').value = receipt.description || '';
+  document.getElementById('receipt-modal').classList.remove('hidden');
+}
+
+function closeReceiptModal() {
+  document.getElementById('receipt-modal').classList.add('hidden');
+}
+
+async function submitReceiptForm(e) {
+  e.preventDefault();
+  const rId = document.getElementById('receipt-modal-id').value;
+  const payload = {
+    date: document.getElementById('receipt-modal-date').value,
+    party_name: document.getElementById('receipt-modal-party').value,
+    amount: document.getElementById('receipt-modal-amount').value,
+    account_number: document.getElementById('receipt-modal-account').value,
+    source: document.getElementById('receipt-modal-source').value,
+    document_number: document.getElementById('receipt-modal-doc').value,
+    description: document.getElementById('receipt-modal-desc').value
+  };
+
+  const url = rId ? `/api/receipts/${rId}` : '/api/receipts';
+  const method = rId ? 'PUT' : 'POST';
+
+  try {
+    const res = await fetch(url, {
+      method: method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    }).then(r => r.json());
+
+    if (res.success) {
+      showToast(res.message || 'رسید واریزی با موفقیت ذخیره شد.', 'success');
+      closeReceiptModal();
+      loadAllData();
+    } else {
+      showToast(res.message || 'خطا در ثبت رسید', 'error');
+    }
+  } catch (err) {
+    showToast('خطا در ارتباط با سرور', 'error');
+  }
+}
+
+async function deleteReceipt(id) {
+  if (!confirm('آیا از حذف این رسید واریزی اطمینان دارید؟ اسناد دوبل و مانده دفتر حساب طرف حساب به‌روز خواهند شد.')) return;
+  try {
+    const res = await fetch(`/api/receipts/${id}`, { method: 'DELETE' }).then(r => r.json());
+    if (res.success) {
+      showToast(res.message, 'success');
+      loadAllData();
+    } else {
+      showToast(res.message, 'error');
+    }
+  } catch (err) {
+    showToast('خطا در حذف رسید', 'error');
+  }
+}
+
+// --- مدیریت اشخاص (Modal & CRUD) ---
+function openPartyModal(partyData = null) {
+  if (partyData) {
+    document.getElementById('party-modal-title').textContent = `ویرایش طرف حساب: ${partyData.name}`;
+    document.getElementById('party-modal-id').value = partyData.id || '';
+    document.getElementById('party-modal-name').value = partyData.name || '';
+    document.getElementById('party-modal-phone').value = partyData.phone || '';
+    document.getElementById('party-modal-notes').value = partyData.notes || '';
+  } else {
+    document.getElementById('party-modal-title').textContent = 'تعریف شخص / طرف حساب جدید';
+    document.getElementById('party-modal-id').value = '';
+    document.getElementById('party-modal-name').value = '';
+    document.getElementById('party-modal-phone').value = '';
+    document.getElementById('party-modal-notes').value = '';
+  }
+  document.getElementById('party-modal').classList.remove('hidden');
+}
+
+function editPartyByName(partyName) {
+  const party = (rawData.parties || []).find(p => p.name === partyName);
+  if (party) {
+    openPartyModal(party);
+  } else {
+    openPartyModal({ name: partyName });
+  }
+}
+
+function closePartyModal() {
+  document.getElementById('party-modal').classList.add('hidden');
+}
+
+async function submitPartyForm(e) {
+  e.preventDefault();
+  const partyId = document.getElementById('party-modal-id').value;
+  const payload = {
+    name: document.getElementById('party-modal-name').value,
+    phone: document.getElementById('party-modal-phone').value,
+    notes: document.getElementById('party-modal-notes').value
+  };
+
+  const url = partyId ? `/api/parties/${partyId}` : '/api/parties';
+  const method = partyId ? 'PUT' : 'POST';
+
+  try {
+    const res = await fetch(url, {
+      method: method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    }).then(r => r.json());
+
+    if (res.success) {
+      showToast(res.message || 'اطلاعات شخص با موفقیت ذخیره شد.', 'success');
+      closePartyModal();
+      loadAllData();
+    } else {
+      showToast(res.message || 'خطا در مدیریت شخص', 'error');
+    }
+  } catch (err) {
+    showToast('خطا در ارتباط با سرور', 'error');
+  }
+}
+
+async function deletePartyByName(partyName) {
+  const party = (rawData.parties || []).find(p => p.name === partyName);
+  if (!party) {
+    showToast('شناسه شخص یافت نشد.', 'error');
+    return;
+  }
+  if (!confirm(`آیا از حذف شخص "${partyName}" اطمینان دارید؟`)) return;
+
+  try {
+    const res = await fetch(`/api/parties/${party.id}`, { method: 'DELETE' }).then(r => r.json());
+    if (res.success) {
+      showToast(res.message, 'success');
+      loadAllData();
+    } else {
+      showToast(res.message, 'error');
+    }
+  } catch (err) {
+    showToast('خطا در حذف شخص', 'error');
+  }
+}
+
+// --- Searchable Combobox & Jalali Helper ---
+function setupPartyComboboxes() {
+  const inputs = document.querySelectorAll('.party-combobox');
+  inputs.forEach(input => {
+    let datalist = document.getElementById('party-list-options');
+    if (!datalist) {
+      datalist = document.createElement('datalist');
+      datalist.id = 'party-list-options';
+      document.body.appendChild(datalist);
+    }
+    input.setAttribute('list', 'party-list-options');
+  });
+}
+
+function updatePartyComboboxOptions() {
+  const datalist = document.getElementById('party-list-options');
+  if (!datalist) return;
+  datalist.innerHTML = '';
+  const partyNames = new Set();
+  (rawData.parties || []).forEach(p => partyNames.add(p.name));
+  (rawData.ledger || []).forEach(l => partyNames.add(l.party_name));
+
+  partyNames.forEach(name => {
+    if (name) {
+      const opt = document.createElement('option');
+      opt.value = name;
+      datalist.appendChild(opt);
+    }
+  });
 }

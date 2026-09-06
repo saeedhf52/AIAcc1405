@@ -197,9 +197,33 @@ function syncAllTransactionsToJournal() {
   console.log(`[AccountingService] ${txs.length} تراکنش و ${receipts.length} رسید واریزی به اسناد دوبل تبدیل و ثبت شد.`);
 }
 
+// حذف سند حسابداری وابسته به یک تراکنش یا رسید
+function deleteJournalVoucherForSource(sourceType, sourceId) {
+  const vouchers = db.prepare('SELECT id FROM journal_vouchers WHERE source_type = ? AND source_id = ?').all(sourceType, sourceId);
+  for (const v of vouchers) {
+    db.prepare('DELETE FROM journal_entries WHERE voucher_id = ?').run(v.id);
+    db.prepare('DELETE FROM journal_vouchers WHERE id = ?').run(v.id);
+  }
+}
+
+// به روزرسانی سند حسابداری دوبل یک تراکنش
+function updateJournalVoucherForTransaction(tx) {
+  deleteJournalVoucherForSource('TRANSACTION', tx.id);
+  return createJournalVoucherForTransaction(tx);
+}
+
+// به روزرسانی سند حسابداری دوبل یک رسید بانکی
+function updateJournalVoucherForReceipt(receipt) {
+  deleteJournalVoucherForSource('RECEIPT', receipt.id);
+  return createJournalVoucherForReceipt(receipt);
+}
+
 module.exports = {
   createJournalVoucherForTransaction,
   createJournalVoucherForReceipt,
+  deleteJournalVoucherForSource,
+  updateJournalVoucherForTransaction,
+  updateJournalVoucherForReceipt,
   getGeneralJournal,
   getGeneralLedger,
   getSubsidiaryLedger,
