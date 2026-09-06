@@ -296,20 +296,28 @@
 
       <!-- View 3: RECEIPTS -->
       <section id="view-receipts" class="space-y-6 hidden">
+        <div class="flex items-center justify-between">
+          <h3 class="font-bold text-base text-slate-100">رسیدهای بانکی و واریزی ثبت‌شده</h3>
+          <button onclick="openReceiptModal()" class="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 font-bold text-white rounded-xl text-xs flex items-center gap-2 transition shadow-lg shadow-emerald-500/20">
+            <i data-lucide="plus" class="w-4 h-4"></i>
+            <span>ثبت رسید واریزی جدید</span>
+          </button>
+        </div>
+
         <div class="p-5 rounded-2xl glass border border-slate-800">
-          <h3 class="font-bold text-sm text-slate-200 mb-4">رسیدهای بانکی و واریزی ثبت‌شده</h3>
           <div class="overflow-x-auto">
             <table class="w-full text-right text-xs">
               <thead class="text-slate-400 border-b border-slate-800 bg-slate-900/50">
                 <tr>
                   <th class="p-3">ردیف</th>
-                  <th class="p-3">تاریخ</th>
-                  <th class="p-3">طرف حساب</th>
-                  <th class="p-3">مبلغ</th>
+                  <th class="p-3 cursor-pointer hover:text-cyan-400" onclick="sortTable('receipts', 'date')">تاریخ ↕</th>
+                  <th class="p-3 cursor-pointer hover:text-cyan-400" onclick="sortTable('receipts', 'party_name')">طرف حساب ↕</th>
+                  <th class="p-3 cursor-pointer hover:text-cyan-400" onclick="sortTable('receipts', 'amount')">مبلغ ↕</th>
                   <th class="p-3">شماره حساب</th>
                   <th class="p-3">منبع</th>
                   <th class="p-3">سند/پیگیری</th>
                   <th class="p-3">شرح</th>
+                  <th class="p-3 text-center">عملیات</th>
                 </tr>
               </thead>
               <tbody id="all-receipts-tbody" class="divide-y divide-slate-800/50">
@@ -322,17 +330,25 @@
 
       <!-- View 4: LEDGER -->
       <section id="view-ledger" class="space-y-6 hidden">
+        <div class="flex items-center justify-between">
+          <h3 class="font-bold text-base text-slate-100">وضعیت خلاصه حساب اشخاص (دفتر حساب)</h3>
+          <button onclick="openPartyModal()" class="px-4 py-2 bg-blue-500 hover:bg-blue-600 font-bold text-white rounded-xl text-xs flex items-center gap-2 transition shadow-lg shadow-blue-500/20">
+            <i data-lucide="user-plus" class="w-4 h-4"></i>
+            <span>افزودن طرف حساب جدید</span>
+          </button>
+        </div>
+
         <div class="p-5 rounded-2xl glass border border-slate-800">
-          <h3 class="font-bold text-sm text-slate-200 mb-4">وضعیت خلاصه حساب اشخاص (دفتر حساب)</h3>
           <div class="overflow-x-auto">
             <table class="w-full text-right text-xs">
               <thead class="text-slate-400 border-b border-slate-800 bg-slate-900/50">
                 <tr>
-                  <th class="p-3">نام طرف حساب</th>
-                  <th class="p-3">کل طلب</th>
-                  <th class="p-3">پرداختی</th>
-                  <th class="p-3">مانده حساب</th>
+                  <th class="p-3 cursor-pointer hover:text-cyan-400" onclick="sortTable('ledger', 'party_name')">نام طرف حساب ↕</th>
+                  <th class="p-3 cursor-pointer hover:text-cyan-400" onclick="sortTable('ledger', 'total_claim')">کل طلب ↕</th>
+                  <th class="p-3 cursor-pointer hover:text-cyan-400" onclick="sortTable('ledger', 'total_paid')">پرداختی ↕</th>
+                  <th class="p-3 cursor-pointer hover:text-cyan-400" onclick="sortTable('ledger', 'balance')">مانده حساب ↕</th>
                   <th class="p-3">وضعیت</th>
+                  <th class="p-3 text-center">عملیات</th>
                 </tr>
               </thead>
               <tbody id="all-ledger-tbody" class="divide-y divide-slate-800/50">
@@ -531,20 +547,106 @@
       </div>
     </div>
 
-    <!-- NEW TRANSACTION MODAL -->
+    <!-- Toast Notification Container -->
+    <div id="toast-container" class="fixed top-5 left-5 z-50 space-y-2 pointer-events-none"></div>
+
+    <!-- PARTY EDIT/CREATE MODAL -->
+    <div id="party-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center hidden">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+          <h3 id="party-modal-title" class="font-bold text-sm text-slate-100">مدیریت طرف حساب</h3>
+          <button onclick="closePartyModal()" class="text-slate-400 hover:text-slate-200">
+            <i data-lucide="x" class="w-5 h-5"></i>
+          </button>
+        </div>
+
+        <form id="party-form" onsubmit="submitPartyForm(event)" class="space-y-3 text-xs">
+          <input type="hidden" id="party-modal-id">
+          <div>
+            <label class="block text-slate-400 mb-1">نام و نام خانوادگی / شرکت:</label>
+            <input type="text" id="party-modal-name" required placeholder="مثلاً: علی صادقی" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 focus:outline-none focus:border-cyan-500">
+          </div>
+          <div>
+            <label class="block text-slate-400 mb-1">شماره تماس (اختیاری):</label>
+            <input type="text" id="party-modal-phone" placeholder="09123456789" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 focus:outline-none focus:border-cyan-500">
+          </div>
+          <div>
+            <label class="block text-slate-400 mb-1">یادداشت / توضیحات:</label>
+            <input type="text" id="party-modal-notes" placeholder="توضیحات تکمیلی..." class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 focus:outline-none focus:border-cyan-500">
+          </div>
+
+          <div class="pt-3 flex gap-2">
+            <button type="submit" class="flex-1 py-2.5 bg-blue-500 hover:bg-blue-600 font-bold text-white rounded-xl transition">ذخیره طرف حساب</button>
+            <button type="button" onclick="closePartyModal()" class="px-4 py-2.5 bg-slate-800 text-slate-300 rounded-xl">انصراف</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- RECEIPT EDIT/CREATE MODAL -->
+    <div id="receipt-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center hidden">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+          <h3 id="receipt-modal-title" class="font-bold text-sm text-slate-100">مدیریت رسید واریزی</h3>
+          <button onclick="closeReceiptModal()" class="text-slate-400 hover:text-slate-200">
+            <i data-lucide="x" class="w-5 h-5"></i>
+          </button>
+        </div>
+
+        <form id="receipt-form" onsubmit="submitReceiptForm(event)" class="space-y-3 text-xs">
+          <input type="hidden" id="receipt-modal-id">
+          <div>
+            <label class="block text-slate-400 mb-1">تاریخ رسید (جلالی):</label>
+            <input type="text" id="receipt-modal-date" required placeholder="1405/06/15" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 focus:outline-none focus:border-emerald-500 jalali-datepicker">
+          </div>
+          <div>
+            <label class="block text-slate-400 mb-1">نام طرف حساب:</label>
+            <input type="text" id="receipt-modal-party" placeholder="انتخاب یا تایپ نام شخص" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 focus:outline-none focus:border-emerald-500 party-combobox">
+          </div>
+          <div>
+            <label class="block text-slate-400 mb-1">مبلغ رسید (ریال):</label>
+            <input type="number" id="receipt-modal-amount" required placeholder="مبلغ به ریال" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 focus:outline-none focus:border-emerald-500">
+          </div>
+          <div>
+            <label class="block text-slate-400 mb-1">شماره حساب / بانک:</label>
+            <input type="text" id="receipt-modal-account" placeholder="شماره کارت یا نام بانک" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 focus:outline-none focus:border-emerald-500">
+          </div>
+          <div>
+            <label class="block text-slate-400 mb-1">منبع / واریزکننده:</label>
+            <input type="text" id="receipt-modal-source" placeholder="مثلا حواله پایا/ساتنا" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 focus:outline-none focus:border-emerald-500">
+          </div>
+          <div>
+            <label class="block text-slate-400 mb-1">شماره سند / پیگیری:</label>
+            <input type="text" id="receipt-modal-doc" placeholder="شماره پیگیری واریز" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 focus:outline-none focus:border-emerald-500">
+          </div>
+          <div>
+            <label class="block text-slate-400 mb-1">شرح رسید:</label>
+            <input type="text" id="receipt-modal-desc" placeholder="توضیحات و بابت..." class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 focus:outline-none focus:border-emerald-500">
+          </div>
+
+          <div class="pt-3 flex gap-2">
+            <button type="submit" class="flex-1 py-2.5 bg-emerald-500 hover:bg-emerald-600 font-bold text-white rounded-xl transition">ذخیره رسید واریزی</button>
+            <button type="button" onclick="closeReceiptModal()" class="px-4 py-2.5 bg-slate-800 text-slate-300 rounded-xl">انصراف</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- NEW/EDIT TRANSACTION MODAL -->
     <div id="tx-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center hidden">
       <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl">
         <div class="flex items-center justify-between border-b border-slate-800 pb-3">
-          <h3 class="font-bold text-sm text-slate-100">ثبت تراکنش دستی جدید</h3>
+          <h3 id="tx-modal-title" class="font-bold text-sm text-slate-100">ثبت تراکنش دستی جدید</h3>
           <button onclick="closeNewTxModal()" class="text-slate-400 hover:text-slate-200">
             <i data-lucide="x" class="w-5 h-5"></i>
           </button>
         </div>
 
         <form id="new-tx-form" onsubmit="submitNewTx(event)" class="space-y-3 text-xs">
+          <input type="hidden" id="modal-tx-id">
           <div>
             <label class="block text-slate-400 mb-1">تاریخ تراکنش (جلالی):</label>
-            <input type="text" id="modal-date" required placeholder="1405/05/17" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 focus:outline-none focus:border-cyan-500">
+            <input type="text" id="modal-date" required placeholder="1405/05/17" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 focus:outline-none focus:border-cyan-500 jalali-datepicker">
           </div>
           <div>
             <label class="block text-slate-400 mb-1">نوع تراکنش:</label>
@@ -557,7 +659,7 @@
           </div>
           <div>
             <label class="block text-slate-400 mb-1">نام طرف حساب:</label>
-            <input type="text" id="modal-party" required placeholder="نام شخص یا پیمانکار" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 focus:outline-none focus:border-cyan-500">
+            <input type="text" id="modal-party" required placeholder="نام شخص یا پیمانکار" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 focus:outline-none focus:border-cyan-500 party-combobox">
           </div>
           <div>
             <label class="block text-slate-400 mb-1">مبلغ (ریال):</label>
