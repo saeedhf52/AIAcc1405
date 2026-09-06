@@ -150,7 +150,36 @@ function getTrialBalance() {
   });
 }
 
-// اسکریپت رترواکتیو برای تمام تراکنش‌های فعلی در دیتابیس
+// ثبت خودکار سند حسابداری دوبل برای رسید بانکی
+function createJournalVoucherForReceipt(receipt) {
+  // receipt: { id, date, party_id, party_name, amount, description, document_number }
+  const bankAcc = getAccountByCode('101');     // موجودی نقد و بانک
+  const recAcc = getAccountByCode('102');      // حساب‌های دریافتنی (اشخاص)
+
+  const voucherNumber = getNextVoucherNumber();
+  const partyNameStr = receipt.party_name || 'ناشناس';
+  const desc = `سند رسید واریزی بانکی - ${partyNameStr} - ${receipt.description || ''} (شماره سند/پیگیری: ${receipt.document_number || 'نامشخص'})`;
+
+  const voucherStmt = db.prepare(`
+    INSERT INTO journal_vouchers (voucher_number, date, description, source_type, source_id)
+    VALUES (?, ?, ?, 'RECEIPT', ?)
+  `);
+  const voucherRes = voucherStmt.run(voucherNumber, receipt.date || getFormattedJalaliDate(), desc, receipt.id);
+  const voucherId = voucherRes.lastInsertRowid;
+
+  const entryStmt = db.prepare(`
+    INSERT INTO journal_entries (voucher_id, account_id, party_id, debit, credit, description)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+
+  // الگو: بدهکار: موجودی نقد و بانک‌ها (۱۰۱) / بستانکار: حساب‌های دریافتنی - تفصیلی شخص (۱۰۲)
+  entryStmt.run(voucherId, bankAcc.id, null, receipt.amount, 0, desc);
+  entryStmt.run(voucherId, recAcc.id, receipt.party_id || null, 0, receipt.amount, desc);
+
+  return voucherId;
+}
+
+// اسکریپت همگام‌سازی کامل رترواکتیو (تراکنش‌ها و رسیدها)
 function syncAllTransactionsToJournal() {
   db.prepare('DELETE FROM journal_entries').run();
   db.prepare('DELETE FROM journal_vouchers').run();
@@ -160,11 +189,17 @@ function syncAllTransactionsToJournal() {
     createJournalVoucherForTransaction(tx);
   });
 
-  console.log(`[AccountingService] ${txs.length} تراکنش به اسناد دوبل تبدیل و ثبت شد.`);
+  const receipts = db.prepare('SELECT * FROM receipts ORDER BY id ASC').all();
+  receipts.forEach(rec => {
+    createJournalVoucherForReceipt(rec);
+  });
+
+  console.log(`[AccountingService] ${txs.length} تراکنش و ${receipts.length} رسید واریزی به اسناد دوبل تبدیل و ثبت شد.`);
 }
 
 module.exports = {
   createJournalVoucherForTransaction,
+  createJournalVoucherForReceipt,
   getGeneralJournal,
   getGeneralLedger,
   getSubsidiaryLedger,

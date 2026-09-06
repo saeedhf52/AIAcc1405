@@ -216,3 +216,15 @@ function initDatabase() {
 initDatabase();
 
 module.exports = db;
+
+// همگام‌سازی پس از خروجی db جهت جلوگیری از Circular Dependency
+setTimeout(() => {
+  try {
+    const { recalculateAllLedgers } = require('../services/ledgerService');
+    const { syncAllTransactionsToJournal } = require('../services/accountingService');
+    recalculateAllLedgers();
+    syncAllTransactionsToJournal();
+  } catch (err) {
+    console.error('[Database Post-Init Sync Error]:', err.message);
+  }
+}, 0);

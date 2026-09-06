@@ -4,6 +4,8 @@ const fs = require('fs');
 const db = require('../config/database');
 const { normalizeNumbers, getFormattedJalaliDate, parseAmount } = require('./jalaliUtils');
 const { recalculateAllLedgers } = require('./ledgerService');
+const { syncAllTransactionsToJournal } = require('./accountingService');
+const { findMatchingParty } = require('./partyMatcher');
 
 function importExcelData(excelPath) {
   const targetPath = excelPath || process.env.EXCEL_SOURCE_PATH || 'D:\\SaeedHf52\\AiAcc1405\\Acc1405.xlsx';
@@ -115,9 +117,10 @@ function importExcelData(excelPath) {
     console.log(`[ExcelImporter] ${importedReceipts} رسید واریزی وارد شد.`);
   }
 
-  // 4. بازنویسی و محاسبه مجدد خلاصه دفتر حساب
+  // 4. بازنویسی و محاسبه مجدد خلاصه دفتر حساب و اسناد حسابداری دوبل
   recalculateAllLedgers();
-  console.log('[ExcelImporter] دفتر حساب کامل بازنویسی و به‌روزرسانی شد.');
+  syncAllTransactionsToJournal();
+  console.log('[ExcelImporter] دفتر حساب و اسناد دوبل کامل بازنویسی و به‌روزرسانی شد.');
 
   return { success: true };
 }

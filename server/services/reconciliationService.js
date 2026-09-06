@@ -1,4 +1,5 @@
 const db = require('../config/database');
+const { similarity } = require('./partyMatcher');
 
 // دریافت لیست رسیدهای واریزی بلاتکلیف (تسویه‌نشده)
 function getUnreconciledReceipts() {
@@ -52,13 +53,14 @@ function runAutoReconciliation() {
       if (matchedTx) matchType = 'auto_doc';
     }
 
-    // 2. تطبیق بر اساس مبلغ دقیق + طرف حساب مشابه
+    // 2. تطبیق بر اساس مبلغ دقیق + تشابه اسمی اشخاص (با الگوریتم Levenshtein)
     if (!matchedTx && receipt.party_name && receipt.amount) {
-      matchedTx = openTxs.find(t =>
-        t.reconciliation_status !== 'matched' &&
-        t.amount === receipt.amount &&
-        (t.party_name.includes(receipt.party_name) || receipt.party_name.includes(t.party_name))
-      );
+      matchedTx = openTxs.find(t => {
+        if (t.reconciliation_status === 'matched' || t.amount !== receipt.amount) return false;
+        if (!t.party_name) return false;
+        const score = similarity(receipt.party_name, t.party_name);
+        return score >= 0.75;
+      });
       if (matchedTx) matchType = 'auto_amount';
     }
 

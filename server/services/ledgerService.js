@@ -20,8 +20,11 @@ function recalculateLedgerForParty(partyName) {
     }
   });
 
-  // 2. رسیدها (رسیدهای واریزی پرداختی به طرف حساب محسوب می‌شوند یا ایجاد بستر)
-  // در الگوی فعلی تراکنش‌های ثبت‌شده منبع اصلی محاسبه دفتر حساب هستند
+  // 2. رسیدهای واریزی بانکی (پرداخت‌های دریافتی از طرف حساب)
+  const receiptRows = db.prepare('SELECT amount FROM receipts WHERE party_name = ?').all(partyName);
+  receiptRows.forEach(row => {
+    totalPaid += row.amount;
+  });
 
   const balance = totalClaim - totalPaid;
 
