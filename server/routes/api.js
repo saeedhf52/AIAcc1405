@@ -420,6 +420,15 @@ router.delete('/receipts/:id', (req, res) => {
 });
 
 // --- مدیریت اشخاص (Parties API) ---
+router.get('/ledger', (req, res) => {
+  try {
+    const rows = db.prepare('SELECT * FROM ledger_summaries ORDER BY balance DESC').all();
+    res.json({ success: true, data: rows });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 router.get('/parties', (req, res) => {
   try {
     const rows = db.prepare('SELECT * FROM parties ORDER BY name ASC').all();
