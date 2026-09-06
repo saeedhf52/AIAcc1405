@@ -1,28 +1,49 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
+const axios = require('axios');
 
-const dbPath = process.env.DATABASE_PATH || path.join(__dirname, '../../data/accounting.db');
+const DB_TYPE = process.env.DB_TYPE || 'sqlite'; // 'sqlite' یا 'cloudflare_d1'
+const CLOUDFLARE_ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID || '0279c0aafb24e4760c977338de646f6e';
+const CLOUDFLARE_DATABASE_ID = process.env.CLOUDFLARE_DATABASE_ID || 'c6414ff9-6474-459e-b462-5ef6948125a1';
+const CLOUDFLARE_API_TOKEN = process.env.CLOUDFLARE_API_TOKEN;
 
-const dataDir = path.dirname(dbPath);
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
+let nativeDb = null;
+if (DB_TYPE === 'sqlite') {
+  const dbPath = process.env.DATABASE_PATH || path.join(__dirname, '../../data/accounting.db');
+  const dataDir = path.dirname(dbPath);
+  if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir, { recursive: true });
+  }
+  nativeDb = new Database(dbPath);
+  nativeDb.pragma('foreign_keys = ON');
+  nativeDb.pragma('journal_mode = WAL');
 }
 
-const db = new Database(dbPath);
-
-db.pragma('foreign_keys = ON');
-db.pragma('journal_mode = WAL');
-
-// کلاس Wrapper جهت همگام‌سازی امضای کدهای SQLite محلی (better-sqlite3) با Cloudflare D1
+// لایه آداپتور هوشمند دو حالته (SQLite محلی برای توسعه / Cloudflare D1 REST API برای Render)
 class DatabaseAdapter {
-  constructor(nativeDb) {
-    this.nativeDb = nativeDb;
-    this.envD1 = null;
+  constructor() {
+    this.isD1 = DB_TYPE === 'cloudflare_d1';
+    this.cfUrl = `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database/${CLOUDFLARE_DATABASE_ID}/query`;
   }
 
-  setEnvD1(d1Binding) {
-    this.envD1 = d1Binding;
+  // متد کمکی اجرای کوئری در Cloudflare D1 به روش همگام از طریق sync request یا پشتیبانی درون برنامه‌ای
+  async queryD1(sql, params = []) {
+    if (!CLOUDFLARE_API_TOKEN) {
+      throw new Error('[Cloudflare D1 Error]: CLOUDFLARE_API_TOKEN set نشده است.');
+    }
+    const response = await axios.post(
+      this.cfUrl,
+      { sql, params },
+      {
+        headers: {
+          'Authorization': `Bearer ${CLOUDFLARE_API_TOKEN}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+    const result = response.data.result[0];
+    return result;
   }
 
   prepare(sql) {
@@ -30,46 +51,104 @@ class DatabaseAdapter {
 
     return {
       get(...params) {
-        if (adapter.envD1) {
-          // در صورتی که در محیط Cloudflare Workers اجرا شده باشد
-          // توجه: در Workers این متدها async خواهند بود
-          return adapter.envD1.prepare(sql).bind(...params).first();
+        if (adapter.isD1) {
+          // در کدهای سینکرون Node با کارهای async هماهنگ می‌شود
+          return adapter.getD1Sync(sql, params);
         }
-        return adapter.nativeDb.prepare(sql).get(...params);
+        return nativeDb.prepare(sql).get(...params);
       },
       all(...params) {
-        if (adapter.envD1) {
-          return adapter.envD1.prepare(sql).bind(...params).all().then(res => res.results);
+        if (adapter.isD1) {
+          return adapter.allD1Sync(sql, params);
         }
-        return adapter.nativeDb.prepare(sql).all(...params);
+        return nativeDb.prepare(sql).all(...params);
       },
       run(...params) {
-        if (adapter.envD1) {
-          return adapter.envD1.prepare(sql).bind(...params).run();
+        if (adapter.isD1) {
+          return adapter.runD1Sync(sql, params);
         }
-        return adapter.nativeDb.prepare(sql).run(...params);
+        return nativeDb.prepare(sql).run(...params);
       }
     };
   }
 
   exec(sql) {
-    if (this.envD1) {
-      return this.envD1.exec(sql);
+    if (this.isD1) {
+      return this.execD1Sync(sql);
     }
-    return this.nativeDb.exec(sql);
+    return nativeDb.exec(sql);
   }
 
-  pragma(statement) {
-    if (!this.envD1) {
-      return this.nativeDb.pragma(statement);
-    }
+  // --- شبیه‌ساز همگام برای متدهای همگام موجود پروژه ---
+  getD1Sync(sql, params) {
+    const deasync = require('deasync');
+    let done = false;
+    let data = null;
+    let err = null;
+
+    this.queryD1(sql, params)
+      .then(res => { data = res.results && res.results[0] ? res.results[0] : null; done = true; })
+      .catch(e => { err = e; done = true; });
+
+    deasync.loopWhile(() => !done);
+    if (err) throw err;
+    return data;
+  }
+
+  allD1Sync(sql, params) {
+    const deasync = require('deasync');
+    let done = false;
+    let data = null;
+    let err = null;
+
+    this.queryD1(sql, params)
+      .then(res => { data = res.results || []; done = true; })
+      .catch(e => { err = e; done = true; });
+
+    deasync.loopWhile(() => !done);
+    if (err) throw err;
+    return data;
+  }
+
+  runD1Sync(sql, params) {
+    const deasync = require('deasync');
+    let done = false;
+    let data = null;
+    let err = null;
+
+    this.queryD1(sql, params)
+      .then(res => {
+        data = {
+          changes: res.meta ? res.meta.changes : 0,
+          lastInsertRowid: res.meta ? res.meta.last_row_id : null
+        };
+        done = true;
+      })
+      .catch(e => { err = e; done = true; });
+
+    deasync.loopWhile(() => !done);
+    if (err) throw err;
+    return data;
+  }
+
+  execD1Sync(sql) {
+    const deasync = require('deasync');
+    let done = false;
+    let err = null;
+
+    this.queryD1(sql, [])
+      .then(() => { done = true; })
+      .catch(e => { err = e; done = true; });
+
+    deasync.loopWhile(() => !done);
+    if (err) throw err;
   }
 }
 
-const adapterDb = new DatabaseAdapter(db);
+const db = new DatabaseAdapter();
 
 function initDatabase() {
-  adapterDb.exec(`
+  db.exec(`
     -- 1. جدول اشخاص (Parties)
     CREATE TABLE IF NOT EXISTS parties (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -219,9 +298,9 @@ function initDatabase() {
     );
   `);
 
-  const accountCount = adapterDb.prepare('SELECT COUNT(*) as count FROM accounts').get().count;
+  const accountCount = db.prepare('SELECT COUNT(*) as count FROM accounts').get().count;
   if (accountCount === 0) {
-    const insertAcc = adapterDb.prepare('INSERT INTO accounts (code, title, type, parent_id) VALUES (?, ?, ?, ?)');
+    const insertAcc = db.prepare('INSERT INTO accounts (code, title, type, parent_id) VALUES (?, ?, ?, ?)');
     const defaultAccounts = [
       ['101', 'موجودی نقد و بانک‌ها', 'asset', null],
       ['102', 'حساب‌ها و اسناد دریافتنی (اشخاص)', 'asset', null],
@@ -236,4 +315,4 @@ function initDatabase() {
 
 initDatabase();
 
-module.exports = adapterDb;
+module.exports = db;
