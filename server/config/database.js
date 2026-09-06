@@ -14,8 +14,62 @@ const db = new Database(dbPath);
 db.pragma('foreign_keys = ON');
 db.pragma('journal_mode = WAL');
 
+// کلاس Wrapper جهت همگام‌سازی امضای کدهای SQLite محلی (better-sqlite3) با Cloudflare D1
+class DatabaseAdapter {
+  constructor(nativeDb) {
+    this.nativeDb = nativeDb;
+    this.envD1 = null;
+  }
+
+  setEnvD1(d1Binding) {
+    this.envD1 = d1Binding;
+  }
+
+  prepare(sql) {
+    const adapter = this;
+
+    return {
+      get(...params) {
+        if (adapter.envD1) {
+          // در صورتی که در محیط Cloudflare Workers اجرا شده باشد
+          // توجه: در Workers این متدها async خواهند بود
+          return adapter.envD1.prepare(sql).bind(...params).first();
+        }
+        return adapter.nativeDb.prepare(sql).get(...params);
+      },
+      all(...params) {
+        if (adapter.envD1) {
+          return adapter.envD1.prepare(sql).bind(...params).all().then(res => res.results);
+        }
+        return adapter.nativeDb.prepare(sql).all(...params);
+      },
+      run(...params) {
+        if (adapter.envD1) {
+          return adapter.envD1.prepare(sql).bind(...params).run();
+        }
+        return adapter.nativeDb.prepare(sql).run(...params);
+      }
+    };
+  }
+
+  exec(sql) {
+    if (this.envD1) {
+      return this.envD1.exec(sql);
+    }
+    return this.nativeDb.exec(sql);
+  }
+
+  pragma(statement) {
+    if (!this.envD1) {
+      return this.nativeDb.pragma(statement);
+    }
+  }
+}
+
+const adapterDb = new DatabaseAdapter(db);
+
 function initDatabase() {
-  db.exec(`
+  adapterDb.exec(`
     -- 1. جدول اشخاص (Parties)
     CREATE TABLE IF NOT EXISTS parties (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,6 +99,7 @@ function initDatabase() {
       category_id INTEGER,
       description TEXT,
       tracking_code TEXT,
+      dedup_hash TEXT,
       reconciliation_status TEXT CHECK(reconciliation_status IN ('unreconciled', 'matched', 'partially')) DEFAULT 'unreconciled',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(party_id) REFERENCES parties(id) ON DELETE SET NULL,
@@ -103,10 +158,6 @@ function initDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
-    -- ==========================================
-    -- سیستم جدید حسابداری دوبل (Double-Entry Accounting)
-    -- ==========================================
-
     -- 8. جدول کدینگ حساب‌ها (Chart of Accounts)
     CREATE TABLE IF NOT EXISTS accounts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -142,10 +193,6 @@ function initDatabase() {
       FOREIGN KEY(party_id) REFERENCES parties(id) ON DELETE SET NULL
     );
 
-    -- ==========================================
-    -- سیستم تایید هوشمند اشخاص (Party Pending Confirmations)
-    -- ==========================================
-
     -- 11. جدول تاییدهای معلق هوش مصنوعی
     CREATE TABLE IF NOT EXISTS pending_confirmations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -158,10 +205,6 @@ function initDatabase() {
       status TEXT CHECK(status IN ('pending', 'confirmed_existing', 'created_new', 'rejected')) DEFAULT 'pending',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
-
-    -- ==========================================
-    -- سیستم مغایرت‌یابی و اقلام باز (Reconciliations)
-    -- ==========================================
 
     -- 12. جدول پیوند مغایرت‌یابی و مطابقت رسید با تراکنش
     CREATE TABLE IF NOT EXISTS reconciliations (
@@ -176,31 +219,9 @@ function initDatabase() {
     );
   `);
 
-  // مایگریشن خودکار افزودن ستون‌های مورد نیاز به دیتابیس‌های موجود
-  try {
-    const receiptCols = db.prepare("PRAGMA table_info(receipts)").all().map(c => c.name);
-    if (!receiptCols.includes('reconciliation_status')) {
-      db.exec("ALTER TABLE receipts ADD COLUMN reconciliation_status TEXT CHECK(reconciliation_status IN ('unreconciled', 'matched', 'partially')) DEFAULT 'unreconciled'");
-      db.exec("UPDATE receipts SET reconciliation_status = 'unreconciled' WHERE reconciliation_status IS NULL");
-    }
-
-    const txCols = db.prepare("PRAGMA table_info(transactions)").all().map(c => c.name);
-    if (!txCols.includes('reconciliation_status')) {
-      db.exec("ALTER TABLE transactions ADD COLUMN reconciliation_status TEXT CHECK(reconciliation_status IN ('unreconciled', 'matched', 'partially')) DEFAULT 'unreconciled'");
-      db.exec("UPDATE transactions SET reconciliation_status = 'unreconciled' WHERE reconciliation_status IS NULL");
-    }
-
-    if (!txCols.includes('dedup_hash')) {
-      db.exec("ALTER TABLE transactions ADD COLUMN dedup_hash TEXT");
-    }
-  } catch (err) {
-    console.error('[Database Migration Error]:', err.message);
-  }
-
-  // ثبت حساب‌های پایه دوبل
-  const accountCount = db.prepare('SELECT COUNT(*) as count FROM accounts').get().count;
+  const accountCount = adapterDb.prepare('SELECT COUNT(*) as count FROM accounts').get().count;
   if (accountCount === 0) {
-    const insertAcc = db.prepare('INSERT INTO accounts (code, title, type, parent_id) VALUES (?, ?, ?, ?)');
+    const insertAcc = adapterDb.prepare('INSERT INTO accounts (code, title, type, parent_id) VALUES (?, ?, ?, ?)');
     const defaultAccounts = [
       ['101', 'موجودی نقد و بانک‌ها', 'asset', null],
       ['102', 'حساب‌ها و اسناد دریافتنی (اشخاص)', 'asset', null],
@@ -211,31 +232,8 @@ function initDatabase() {
     ];
     defaultAccounts.forEach(acc => insertAcc.run(acc[0], acc[1], acc[2], acc[3]));
   }
-
-  // خودکارسازی امپورت اولیه داده‌ها از اکسل در صورت خالی بودن جدول تراکنش‌ها
-  const txCount = db.prepare('SELECT COUNT(*) as count FROM transactions').get().count;
-  if (txCount === 0) {
-    try {
-      const importExcelData = require('../services/excelImporter');
-      importExcelData();
-    } catch (err) {
-      console.warn('[Database Auto-Seed Warning]:', err.message);
-    }
-  }
 }
 
 initDatabase();
 
-module.exports = db;
-
-// همگام‌سازی پس از خروجی db جهت جلوگیری از Circular Dependency
-setTimeout(() => {
-  try {
-    const { recalculateAllLedgers } = require('../services/ledgerService');
-    const { syncAllTransactionsToJournal } = require('../services/accountingService');
-    recalculateAllLedgers();
-    syncAllTransactionsToJournal();
-  } catch (err) {
-    console.error('[Database Post-Init Sync Error]:', err.message);
-  }
-}, 0);
+module.exports = adapterDb;

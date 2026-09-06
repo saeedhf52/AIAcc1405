@@ -1,0 +1,8 @@
+name = "saeed-9router-cloud"
+main = "server.js"
+compatibility_date = "2024-09-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "accounting"
+database_id = "PASTE_YOUR_D1_DATABASE_ID_HERE"
