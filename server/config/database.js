@@ -211,6 +211,17 @@ function initDatabase() {
     ];
     defaultAccounts.forEach(acc => insertAcc.run(acc[0], acc[1], acc[2], acc[3]));
   }
+
+  // خودکارسازی امپورت اولیه داده‌ها از اکسل در صورت خالی بودن جدول تراکنش‌ها
+  const txCount = db.prepare('SELECT COUNT(*) as count FROM transactions').get().count;
+  if (txCount === 0) {
+    try {
+      const importExcelData = require('../services/excelImporter');
+      importExcelData();
+    } catch (err) {
+      console.warn('[Database Auto-Seed Warning]:', err.message);
+    }
+  }
 }
 
 initDatabase();

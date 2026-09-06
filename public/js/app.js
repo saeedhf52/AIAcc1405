@@ -22,6 +22,13 @@ document.addEventListener('DOMContentLoaded', () => {
   lucide.createIcons();
   loadAllData();
   setupPartyComboboxes();
+  if (window.jalaliDatepicker) {
+    jalaliDatepicker.startWatch({
+      time: false,
+      hasSecond: false,
+      date: true
+    });
+  }
 });
 
 function showToast(message, type = 'success') {
@@ -971,6 +978,10 @@ function setupPartyComboboxes() {
       document.body.appendChild(datalist);
     }
     input.setAttribute('list', 'party-list-options');
+    input.setAttribute('data-jdp', '');
+  });
+  document.querySelectorAll('.jalali-datepicker').forEach(el => {
+    el.setAttribute('data-jdp', '');
   });
 }
 
